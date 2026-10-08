@@ -1032,14 +1032,19 @@ began, not what problem it was over — but the schema constant is, so
 = "scipy"` and the optimum's `ampere_start`: both keep their schema-9
 meaning exactly. **`ampere_start_kind`** is written by `Engine.finish` on
 **every** engine's run: `"optimum"` (the engine ran the optimiser itself),
-`"prior"` (prior draws — `initial="prior"`, a fallback, or an engine whose
+`"mixed"` (*Amended W7.17*: the ball at the optimum on the unsaturated
+coordinates, each walker's own prior draw on the coordinates
+`saturated_bounds` found on a bound), `"prior"` (prior draws — `initial="prior"`, a fallback, or an engine whose
 start is the prior, Pathfinder's included) or `"supplied"` (a caller's
-array or `Optimum`). **`ampere_start_fallback`** is conditional: the
+array or `Optimum`). **`ampere_start_fallback`** is conditional and has two meanings: the
 reason in one sentence, on a run whose default start fell back to the
-prior (no start the optimiser could score, or an optimum on a prior
-bound). Neither enters `problem_fingerprint`. A key on every engine run
+prior (no start the optimiser could score); and, on a `"mixed"` start
+*(Amended W7.17)*, the labels that started from prior draws,
+comma-separated in layout order and nothing else. A fourth value of an
+existing key adds no key, so the constant stays 11. Neither enters `problem_fingerprint`. A key on every engine run
 rides a bump, so the constant is 11 (W7.0 took 10). `ampere.results.
-check_convergence(tree, *, rhat=1.05, ess=100)` reads `ampere_start_kind`
+check_convergence(tree, *, rhat=1.1, ess=100)` (the R-hat default was 1.05
+until W7.17: the ensemble convention) reads `ampere_start_kind`
 and `ampere_start_fallback` for its remedy; it and the `ResultsWarning`
 `emit` and `summary` issue on a failing chain-based run are guarded by
 `ampere_approximation` exactly as `summary`'s approximation warning is,
@@ -1468,6 +1473,7 @@ training set and is what the composed problem is for.
 | `ResultsError` lives in `ampere/core/exceptions.py`, re-exported here | §15 R5 asked for the move and it was made the same day the ruling landed (2026-09-03): one class, two import paths, no call-site changes — pinned by a test at the freeze |
 | A point estimate is an `Optimum` with an `optimum` group, never a one-draw `posterior` *(Added W6.7)* | A mode stored as a posterior would be diagnosed, plotted and reweighted as a sample; its own group keeps it out of every posterior reader while the one results format and the netCDF route still carry it, and `ampere_start` (schema 9) ties a seeded run back to it |
 | An `Optimum` records the coordinates its minimiser moved in *(Added W7.6)* | The scipy route now moves bounded coordinates in their constrained value (a sigmoid-saturated line search in `u` ended W6.7's NGC6302 fit at a box corner); the same point can be reached either way, so the choice is provenance, not identity — a field beside the vector, absent-means-`"unconstrained"` so every beta-stored optimum reads unchanged, and no schema bump because nothing a run records moves |
+| A mixed start is a fourth `ampere_start_kind`, and the verdict's R-hat default is 1.1 *(Amended W7.17)* | A new value of an existing key adds no key, so no bump (the rule of the schema-11 history comment); `ampere_start_fallback` names the prior-started labels. 1.05 flagged a well-run ensemble (Appendix A reaches 1.053), so the default is the ensemble convention; the remedy names the labels |
 | A run says which start it had, and a failing chain is told so *(Added W7.12)* | `ampere_start_route`/`ampere_start` already meant something (schema 9), so the ensembles' new default start rides a new key, `ampere_start_kind`, rather than redefining them; the verdict reuses `summary`'s `ampere_approximation` guard so a VI or SBI run is never warned about R-hat |
 
 ## 13. Deliberate limitations of v1.8

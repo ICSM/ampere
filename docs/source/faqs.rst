@@ -18,7 +18,7 @@ Inference
 
 **summary says my R-hat is 1.5 — what now?** Ask for the verdict:
 :func:`ampere.results.check_convergence` holds every posterior variable to an
-R-hat below 1.05 and a bulk effective sample size of at least 100 (both
+R-hat below 1.1 (the ensemble convention) and a bulk effective sample size of at least 100 (both
 keywords you can change) and returns the failing variables with their numbers
 and a remedy in words: more steps when only the ESS is short, more walkers and
 more steps when most variables have not mixed, the optimiser's start if the run
@@ -36,12 +36,16 @@ the walkers in a tight ball around it (:doc:`optimisers`). ``initial="prior"``
 starts them from prior draws instead — the default in 1.0.0b1, reproduced
 bit for bit — and ``initial=optimise(problem)`` hands over the full eight-start
 route, or any :class:`~ampere.results.Optimum` you already have. When the
-optimiser finds no start it can score, or its mode sits on a prior bound (a
-ball there is degenerate and every walker stays on the bound), the run falls
-back to the prior with a :class:`~ampere.inference.DefaultStartWarning` that
-names the bound and the remedies. The run records which in
-``ampere_start_kind`` (``"optimum"``, ``"prior"`` or ``"supplied"``) and any
-fallback in ``ampere_start_fallback``. NUTS, VI and the nested samplers keep
+optimiser's mode sits on a bound of the prior's support (a half-normal GP
+amplitude's floor at zero, say) the start is **mixed**, and silent: the ball at
+the mode on the other coordinates, and on each pinned one every walker's own
+prior draw, because a ball around a bound-pinned mode is degenerate. The run
+names those coordinates in ``ampere_start_fallback``. Only a problem the
+optimiser finds no start it can score for falls back to the whole prior, with a
+:class:`~ampere.inference.DefaultStartWarning`. The run records which in
+``ampere_start_kind`` (``"optimum"``, ``"mixed"``, ``"prior"`` or
+``"supplied"``) and any fallback or mixed coordinates in
+``ampere_start_fallback``. NUTS, VI and the nested samplers keep
 their own starts.
 
 **How many walkers and steps?** The default walker count is four per free

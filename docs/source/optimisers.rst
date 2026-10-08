@@ -154,8 +154,12 @@ its ball, recording ``ampere_start_kind = "optimum"`` beside the route and
 record above; ``initial="prior"`` restores the prior-draw start, and passing
 ``initial=optimise(problem)`` is how to ask for the full eight-start route
 (or any other optimum) instead of the one-start default. An optimum on a
-prior bound, or no start the optimiser can score, falls back to the prior
-with a :class:`~ampere.inference.DefaultStartWarning`.
+bound of the prior's support (a half-normal amplitude's floor, say) starts
+**mixed** and silently: the ball at the mode on the other coordinates, each
+walker's own prior draw on the pinned ones, named in
+``ampere_start_fallback`` (``ampere_start_kind = "mixed"``, W7.17). Only no
+start the optimiser can score falls back to the whole prior, with a
+:class:`~ampere.inference.DefaultStartWarning`.
 
 .. code-block:: pycon
 
@@ -179,7 +183,8 @@ problem's provenance at the time. A run seeded
 from it records ``ampere_start`` (the route, the optimum's identity hash, the
 density, the evaluations and convergence) and every run records
 ``ampere_start_route`` — provenance schema 9 — and, since schema 11,
-``ampere_start_kind`` (``"optimum"``, ``"prior"`` or ``"supplied"``).
+``ampere_start_kind`` (``"optimum"``, ``"mixed"``, ``"prior"`` or
+``"supplied"``).
 ``to_datatree()`` writes an ``optimum`` group and **no** ``posterior``, so it
 goes through the ordinary netCDF route and back:
 

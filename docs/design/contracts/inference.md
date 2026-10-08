@@ -1699,15 +1699,20 @@ stream — reproducible from the problem's seed, and the problem's
 the run does not depend on the machine) and start from that ball. `initial="prior"`
 is the former default, the same prior draws on the same stream, bit for bit;
 an array or an `Optimum` is the caller's, and `initial=optimise(problem)` is
-the full eight-start route. Two problems fall back to the prior with a
-`DefaultStartWarning` naming the reason and `initial="prior"`: no start the
-optimiser can score (`optimise` raises `EngineError`), and an optimum
-`saturated_bounds` finds on a bound of the support (a ball there is
-degenerate, every walker staying on the bound), whose warning names each
-label, the value it sits at, and "widen or move the prior". A refused
+the full eight-start route. A problem with no start the optimiser can score
+(`optimise` raises `EngineError`) falls back to the prior with a
+`DefaultStartWarning` naming the reason and `initial="prior"`. An optimum
+`saturated_bounds` finds on a bound of the support (a half-normal
+amplitude's floor, say; a ball there is degenerate, every walker staying on
+the bound) starts **mixed**, silently *(Amended W7.17, 2026-10-08;
+decision-log row "The mixed start and the 1.1 verdict")*: the ball at the
+optimum on the unsaturated coordinates and, on each saturated one, every
+walker's own prior draw (one joint draw per walker, scored finite, from the
+`"initialisation"` stream after the walker's ball draw, so a mixed run is
+reproducible from the problem's seed). A refused
 covariance is not a fallback (the ball's diagonal stands in). The
-optimiser's own `BoundSaturationWarning` is caught inside the engine, which
-gives its own; the optimiser's evaluations are not counted as the run's
+optimiser's own `BoundSaturationWarning` is caught inside the engine; the
+optimiser's evaluations are not counted as the run's
 failures. NUTS, blackjax, VI and the nested samplers keep their starts. An
 ensemble engine whose problem has `ENSEMBLE_SIZE_WARNING = 16` or more free
 coordinates warns once per run (`EnsembleSizeWarning`), naming NUTS on a
@@ -1725,9 +1730,11 @@ density, evaluation count, convergence) on a run seeded from an `Optimum` —
 `results.md` §9's schema 9. A default-started ensemble run is such a run: it
 writes the scipy route and the optimum's record. *(Amended W7.12, schema
 11)*: `ampere_start_kind` (`"optimum"` when the engine ran the optimiser
-itself, `"prior"` for prior draws, `"supplied"` for a caller's array or
-`Optimum`) on every engine's run, and `ampere_start_fallback`, the reason,
-when the default fell back.
+itself, `"mixed"` for the mixed start (W7.17, no new key, no bump), `"prior"`
+for prior draws, `"supplied"` for a caller's array or `Optimum`) on every
+engine's run, and `ampere_start_fallback`, the reason when the default fell
+back to the prior, or the comma-separated labels that started from prior
+draws on a mixed start.
 
 **The refusals, by name.** `method="map"`/`"vi"` on a problem with no
 differentiable realisation (the sentence names `"scipy"`); an unknown method
@@ -2868,6 +2875,7 @@ True
 | Capability flags are class attributes on W1.5's ABCs, defaulting to the reference answers | Promoted at the freeze (ruled 2026-09-03, §19.6), replacing the interim `getattr` reads with identical semantics: every composed piece declares the three flags, silence inherits `False`/`False`/`"cpu"`, and `declared_capabilities` reads them directly |
 | `simulate` draws Gaussian observations and refuses everything else | A family declares only `log_prob`; guessing would train SBI on the wrong forward model |
 | `substream` lives in its own module | `lowering.md` §12.7 asked W1.13 to ratify or move it; **ratified in place** (ruled 2026-09-03) — pure stdlib+numpy, deliberately free-standing |
+| A bound-pinned mode starts mixed, not from the prior *(Amended W7.17)* | The ball is degenerate only on the pinned coordinates, so those take prior draws and the rest keep the ball; the warning's "widen or move the prior" was wrong advice for a physical floor, and only a problem the optimiser cannot start at all still falls back to the whole prior, loudly |
 | The ensembles start at the optimiser's mode by default *(Added W7.12)* | From the prior the memo's first fit reached R-hat 1.5 at 36 000 evaluations; the one-start scipy mode gives 1.05 at the same budget. One start and no time cap keep it cheap and machine-independent; a bound-pinned or unstartable optimum falls back to the prior, loudly, since a ball on a bound is degenerate |
 
 ## 17. Deliberate limitations of v1.7
