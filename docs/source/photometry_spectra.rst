@@ -205,6 +205,42 @@ bump absorbed separately, the one shared factor is free to settle near the
 two truths' honest compromise (0.96, against a mean of 1.00), and the
 physical parameters recover alongside it.
 
+.. _photometry-spectra-limits:
+
+An upper limit is a likelihood statement, not a datum
+-----------------------------------------------------
+
+A non-detection is not a measurement of zero with a small error bar, and
+fitting it as one pulls the model towards a flux nobody observed. HD 105's
+catalogue (``HD105_SED.csv``) flags two far-infrared points as upper limits,
+SPIRE 500 micron and LABOCA 870 micron, and the star-disc twin
+(:doc:`migrating`) declares them as censored observations on its photometry:
+
+.. code-block:: python
+
+    names, _, limit_flux, limit_error = generators.read_limits()  # the two flagged rows
+    names = [*votable_names, *names]                             # nineteen, then the limits
+    flags = np.arange(len(names)) >= len(names) - 2             # True for the last two
+    photometry = Likelihood(
+        GaussianFamily(),
+        IndependentNoise(),
+        censoring=Censoring.upper_limits(flags),
+    )
+
+Each flagged point then contributes the log of the probability that the true
+flux lies *below* its recorded value, :math:`\log \Phi(z)` with :math:`z =
+(\text{recorded} - \text{predicted}) / \sigma`, in place of the Gaussian
+density; the other nineteen are untouched. This is the Tobit term of the
+likelihood contract (``docs/design/contracts/likelihoods.md``, section 9). Two
+rules go with it. A masked sample contributes nothing whatever its limit
+kind, so masking beats censoring. And a limit under a correlated-noise model
+is refused when the problem is composed, not approximated, so declare limits
+on an independent-noise dataset: which is why the twin puts its Gaussian
+process on the RVS spectrum and not on the photometry. The recorded value of
+a limit is whatever the catalogue holds; here that is a flux below three
+times its error, flagged by the catalogue, and a reader who wants a stated
+:math:`3\sigma` limit declares that number as the recorded value instead.
+
 Running it
 -------------
 

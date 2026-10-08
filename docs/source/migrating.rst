@@ -753,6 +753,9 @@ emits two channels, ``"sed"`` and ``"rvs"``, so the Gaia-RVS spectrum is
 modelled on its own grid. Two photometric bands that the bundled filter
 library lacks (ALMA band 6 and ATCA 9 mm) are top-hats with
 ``detector="energy"``.
+The CSV's two flagged upper limits (SPIRE 500 micron, and LABOCA 870 micron
+as a third top-hat) are in the fit as a ``Censoring`` declaration, which the
+legacy never used; :ref:`the worked example <photometry-spectra-limits>` shows it.
 
 .. note::
 

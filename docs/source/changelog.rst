@@ -75,6 +75,12 @@ Unreleased
   scales. Its figures are the first to be built with the documentation, by
   matplotlib's plot directive from ``docs/source/plots/``, at a reduced
   budget.
+* **The star-disc twin fits HD 105's two upper limits.** The CSV's SPIRE
+  500 micron and LABOCA 870 micron non-detections, which the legacy never
+  used, are declared with ``Censoring.upper_limits`` on the twin's
+  photometry (twenty-one points, ``build_problem(limits=True)`` by default;
+  ``limits=False`` is the nineteen of before). :doc:`photometry_spectra`
+  gains the worked censoring example.
 
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
