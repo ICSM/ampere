@@ -194,3 +194,28 @@ class TestMain:
         assert "free parameters:" in out
         assert "emcee on reference" in out
         assert "wall clock" in out
+
+
+class TestTheMixedStart:
+    """W7.17: a flexible-likelihood fit of a good model starts mixed and says nothing."""
+
+    def test_the_quickstarts_gp_fit_starts_mixed_and_silent(self) -> None:
+        import warnings
+
+        from ampere.inference import DefaultStartWarning, EmceeEngine
+        from ampere.results import ResultsWarning
+
+        problem = build_problem(gp=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DefaultStartWarning)
+            warnings.simplefilter("ignore", ResultsWarning)
+            run = EmceeEngine(problem, walkers=24).run(12, burn_in=4)
+        assert run.attrs["ampere_start_kind"] == "mixed"
+        saturated = run.attrs["ampere_start_fallback"].split(", ")
+        amplitudes = [
+            label
+            for label in problem.parameters.free_labels()
+            if label.endswith("likelihood.amplitude")
+        ]
+        assert amplitudes
+        assert set(amplitudes) <= set(saturated), (amplitudes, saturated)

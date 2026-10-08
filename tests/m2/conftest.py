@@ -22,11 +22,13 @@ so a test must not assume it received a freshly emitted run.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
 
+from ampere.inference import DefaultStartWarning
 from examples.m2_misspecification import study
 
 #: The size every CI assertion is made at: the paper study's own, and the one
@@ -37,7 +39,7 @@ CI_SIZE = 200
 
 @pytest.fixture(scope="session")
 def _study_session() -> tuple[
-    dict[tuple[str, str], dict[str, Any]], dict[tuple[str, str], study.Diagnosis]
+    dict[tuple[str, str], dict[str, Any]], dict[tuple[str, str], study.Diagnosis], list[str]
 ]:
     """The eight reference-backend runs and their diagnostics, computed once.
 
@@ -54,21 +56,35 @@ def _study_session() -> tuple[
     Splitting them would either derive the groups twice or leave the second
     fixture reading numbers the first had already thrown away.
     """
-    results = study.run_study(size=CI_SIZE, budget=study.TEST_EMCEE)
-    return results, study.prepare(results, thin=20)
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        results = study.run_study(size=CI_SIZE, budget=study.TEST_EMCEE)
+    # W7.17: the default start of the control's flexible fit is mixed and silent;
+    # a row asserts this list is empty.
+    default_start = [str(w.message) for w in record if issubclass(w.category, DefaultStartWarning)]
+    for caught in record:
+        if not issubclass(caught.category, DefaultStartWarning):
+            warnings.warn_explicit(caught.message, caught.category, caught.filename, caught.lineno)
+    return results, study.prepare(results, thin=20), default_start
 
 
 @pytest.fixture(scope="session")
 def study_results(
-    _study_session: tuple[dict[tuple[str, str], dict[str, Any]], Any],
+    _study_session: tuple[dict[tuple[str, str], dict[str, Any]], Any, list[str]],
 ) -> dict[tuple[str, str], dict[str, Any]]:
     """The eight runs, each carrying the derived group its diagnostic needed."""
     return _study_session[0]
 
 
 @pytest.fixture(scope="session")
+def study_default_start_warnings(_study_session: tuple[Any, Any, list[str]]) -> list[str]:
+    """The ``DefaultStartWarning`` messages the study session's runs issued (W7.17: none)."""
+    return _study_session[2]
+
+
+@pytest.fixture(scope="session")
 def diagnoses(
-    _study_session: tuple[Any, dict[tuple[str, str], study.Diagnosis]],
+    _study_session: tuple[Any, dict[tuple[str, str], study.Diagnosis], list[str]],
 ) -> dict[tuple[str, str], study.Diagnosis]:
     """The whiteness / localisation answers for those same eight runs."""
     return _study_session[1]

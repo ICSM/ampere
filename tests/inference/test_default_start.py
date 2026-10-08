@@ -3,8 +3,10 @@
 The default start of :class:`~ampere.inference.EmceeEngine` and
 :class:`~ampere.inference.ZeusEngine` is a ball at the one-start scipy
 optimum; ``initial="prior"`` is the former default, bit for bit; a problem
-the optimiser cannot start, or whose optimum sits on a prior bound, falls
-back to the prior with a :class:`~ampere.inference.DefaultStartWarning`.
+the optimiser cannot start falls back to the prior with a
+:class:`~ampere.inference.DefaultStartWarning`; one whose optimum sits on a
+prior bound starts mixed (W7.17: prior draws on the pinned coordinates, the ball
+on the rest), silently.
 :func:`~ampere.results.check_convergence` is the verdict ``emit`` and
 ``summary`` warn with. The regression row is the user-journeys memo's
 Appendix A problem (``docs/design/user_journeys_memo.md``): the first fit a
@@ -14,6 +16,7 @@ user writes on the beta, which reached R-hat 1.5 from the prior.
 from __future__ import annotations
 
 import json
+import math
 import warnings
 from typing import Any
 
@@ -47,6 +50,8 @@ from ampere.inference import (
 from ampere.results import ConvergenceVerdict, ResultsWarning, check_convergence, summary
 
 SEED = 20261007
+#: Twice the measured spread (0.030) of the offset column, which starts in the ball.
+OFFSET_BALL_BOUND = 0.06
 
 # ---------------------------------------------------------------------------
 # Problems
@@ -224,7 +229,7 @@ class TestAppendixA:
         assert run.attrs["ampere_start_route"] == "scipy"
         assert json.loads(run.attrs["ampere_start"])["route"] == "scipy"
         assert "ampere_start_fallback" not in run.attrs
-        verdict = check_convergence(run, rhat=1.1)
+        verdict = check_convergence(run)
         assert verdict.passed, str(verdict)
 
     def test_the_prior_start_is_the_former_default_bit_for_bit(self, appendix_a_prior: Any) -> None:
@@ -325,23 +330,36 @@ class TestTheDefaultStart:
 
 class TestTheFallbacks:
     @pytest.mark.parametrize("engine", [EmceeEngine, ZeusEngine])
-    def test_a_bound_pinned_optimum_falls_back_to_the_prior(self, engine: Any) -> None:
-        with warnings.catch_warnings(record=True) as record:
-            warnings.simplefilter("always")
-            run = engine(edge_problem(), walkers=8).run(10)
-        messages = _caught(DefaultStartWarning, record)
-        assert len(messages) == 1
-        assert "model.slope = 1" in messages[0]
-        assert "initial='prior'" in messages[0]
-        assert "Widen or move the prior" in messages[0]
-        # the optimiser's own warning is the engine's to give, not repeated
-        from ampere.inference import BoundSaturationWarning
+    def test_a_bound_pinned_optimum_starts_mixed_and_silent(self, engine: Any) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DefaultStartWarning)
+            from ampere.inference import BoundSaturationWarning
 
-        assert not _caught(BoundSaturationWarning, record)
-        assert run.attrs["ampere_start_kind"] == "prior"
-        assert run.attrs["ampere_start_route"] == "prior"
-        assert "model.slope" in run.attrs["ampere_start_fallback"]
-        assert "ampere_start" not in run.attrs
+            warnings.simplefilter("error", BoundSaturationWarning)
+            run = engine(edge_problem(), walkers=8).run(10)
+        assert run.attrs["ampere_start_kind"] == "mixed"
+        assert run.attrs["ampere_start_route"] == "scipy"
+        assert json.loads(run.attrs["ampere_start"])["route"] == "scipy"
+        assert run.attrs["ampere_start_fallback"] == "model.slope, model.width"
+
+    def test_the_mixed_positions_are_prior_draws_on_the_saturated_columns_only(self) -> None:
+        engine = EmceeEngine(edge_problem(), walkers=64)
+        positions = engine._ensemble_start(None, 64, engine._checked_initial)
+        labels = engine.problem.parameters.free_labels()
+        column = {label: positions[:, labels.index(label)] for label in labels}
+        assert np.ptp(column["model.slope"]) > 0.5
+        assert np.std(column["model.slope"]) > 0.15
+        assert np.ptp(column["model.width"]) > 0.5
+        assert np.std(column["model.offset"]) < OFFSET_BALL_BOUND
+        assert all(math.isfinite(engine.log_prob(row)) for row in positions)
+
+    def test_a_mixed_run_is_reproducible_from_the_seed(self) -> None:
+        first = EmceeEngine(edge_problem(), walkers=8).run(10)
+        second = EmceeEngine(edge_problem(), walkers=8).run(10)
+        np.testing.assert_array_equal(
+            first["posterior"].dataset["model.slope"].values,
+            second["posterior"].dataset["model.slope"].values,
+        )
 
     def test_no_finite_start_falls_back_to_the_prior(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from ampere.inference import _optimise
@@ -417,7 +435,7 @@ class TestTheVerdict:
         assert verdict.applicable and not verdict.passed
         assert list(verdict.failing) == ["model.norm"]
         rhat, ess = verdict.failing["model.norm"]
-        assert not (rhat < 1.05 and ess >= 100)
+        assert not (rhat < 1.1 and ess >= 100)
         assert "initial='prior'" in verdict.remedy
         assert "model.norm (R-hat" in str(verdict)
         # one variable in all is not "one fails while the rest pass"

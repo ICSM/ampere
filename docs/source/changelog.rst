@@ -100,6 +100,20 @@ Unreleased
   language is declared, and a figure without ``:alt:`` text in a
   reStructuredText page is now a build warning.
 
+* **A bound-pinned mode starts mixed, and the verdict's R-hat threshold is
+  1.1.** A half-normal GP amplitude's mode sits on its floor at zero whenever
+  the model fits, so every flexible-likelihood fit of a good model used to warn
+  with a :class:`~ampere.inference.DefaultStartWarning` and start from the
+  prior. The ensembles' default start is now **mixed** in that case: the ball
+  at the optimiser's mode on the other coordinates and, on each pinned one,
+  every walker's own prior draw, silently, recorded as
+  ``ampere_start_kind = "mixed"`` with the coordinates in
+  ``ampere_start_fallback``; only a problem the optimiser cannot start at all
+  still falls back to the whole prior with the warning. The default R-hat of
+  :func:`~ampere.results.check_convergence`, and so of the ``ResultsWarning``
+  from ``emit`` and ``summary``, is 1.1, the ensemble convention (1.05 was
+  stricter than a well-run ensemble reaches at a modest budget).
+
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
 

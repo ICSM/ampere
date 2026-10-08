@@ -716,6 +716,56 @@ class Engine(abc.ABC):
                 )
         return positions
 
+    def _mixed(
+        self,
+        optimum: Optimum,
+        saturated: Sequence[str],
+        count: int,
+        *,
+        spread: float = _BALL_SPREAD,
+        attempts: int = 200,
+    ) -> np.ndarray:
+        """*count* start points: the ball at *optimum*, prior draws on the *saturated* columns.
+
+        **W7.17.** A ball around a bound-pinned mode is degenerate on the pinned
+        coordinates (every walker stays on the bound), so each walker takes its
+        ball draw exactly as :meth:`_ball` makes it, then has its *saturated*
+        columns overwritten by the same walker's own joint-prior draw (one
+        joint draw per walker, its other columns discarded). A walker whose
+        result cannot be scored is re-drawn, both parts, up to *attempts*
+        times. Both parts use the ``"initialisation"`` stream, the ball first,
+        so a mixed run is reproducible from the problem's seed.
+        """
+        labels = self.problem.parameters.free_labels()
+        columns = [labels.index(label) for label in saturated]
+        try:
+            centre, covariance = aligned(optimum, labels)
+        except ResultsError as error:
+            raise EngineError(f"{self.NAME} cannot start around this optimum: {error}") from None
+        if covariance is not None:
+            factor = np.linalg.cholesky(covariance) * spread
+        else:
+            factor = np.diag((0.01 * np.abs(centre) + 1e-3) * (spread / _BALL_SPREAD))
+        rng = self.stream("initialisation")
+        positions = np.empty((count, self.problem.free_size), dtype=float)
+        for index in range(count):
+            for _ in range(attempts):
+                u = centre + factor @ rng.standard_normal(centre.size)
+                theta = np.array(self.problem.constrain(u), dtype=float)
+                draw = self.problem.parameters.pack(self.problem.sample_prior(rng))
+                theta[columns] = np.asarray(draw, dtype=float)[columns]
+                if math.isfinite(self.log_prob(theta)):
+                    positions[index] = theta
+                    break
+            else:
+                raise EngineError(
+                    f"{self.NAME} could not find a start point with a finite log-probability in "
+                    f"{attempts} draws of the mixed start (the ball at the {optimum.route!r} "
+                    f"optimum, prior draws on {', '.join(saturated)}). "
+                    f"problem.failure_summary() says why:\n{self.problem.failure_summary()}"
+                )
+        return positions
+
     def _start_positions(
         self,
         initial: Any,
@@ -760,16 +810,18 @@ class Engine(abc.ABC):
         An array or an :class:`~ampere.results.Optimum` is the caller's, as
         before; the eight-start route is ``initial=optimise(problem)``.
 
-        Two problems fall back to the prior with a :class:`~ampere.inference.
-        DefaultStartWarning`: one the optimiser cannot start (no start it could
-        score), and one whose optimum :func:`~ampere.inference.saturated_bounds`
-        finds on a bound of the support, because a ball around a bound-pinned
-        mode is degenerate and every walker stays on the bound
-        (``docs/design/user_journeys_memo.md``, Appendix B). A refused
+        A problem the optimiser cannot start (no start it could score) falls
+        back to the prior with a :class:`~ampere.inference.DefaultStartWarning`.
+        A mode that :func:`~ampere.inference.saturated_bounds` finds on a bound
+        of the support (a half-normal amplitude's floor at zero, say) starts
+        **mixed** (W7.17), silently: the ball at the mode on the unsaturated
+        coordinates and, on each saturated one, every walker's own prior draw,
+        because a ball around a bound-pinned mode is degenerate. A refused
         covariance is not a fallback: the ball's diagonal stands in for it.
 
-        Records ``ampere_start_kind`` (``"optimum"``, ``"prior"`` or
-        ``"supplied"``) and, after a fallback, ``ampere_start_fallback`` for
+        Records ``ampere_start_kind`` (``"optimum"``, ``"mixed"``, ``"prior"`` or
+        ``"supplied"``) and, after a fallback or a mixed start,
+        ``ampere_start_fallback`` (the reason, or the prior-started labels) for
         :meth:`finish`; and warns once, with :class:`~ampere.inference.
         EnsembleSizeWarning`, when the problem is large enough
         (:data:`ENSEMBLE_SIZE_WARNING`) that a gradient sampler is the better tool.
@@ -800,7 +852,7 @@ class Engine(abc.ABC):
         if initial is not None:
             self._start_kind = "supplied"
             return self._start_positions(initial, count, checked)
-        optimum, reason = self._default_optimum()
+        optimum, saturated, reason = self._default_optimum()
         # The optimiser's evaluations are not this run's draws: a start it
         # could not score is no more a sampling failure than a rejected
         # proposal of its own line search.
@@ -816,17 +868,27 @@ class Engine(abc.ABC):
                 stacklevel=3,
             )
             return self._start_positions(None, count, checked)
+        if saturated:
+            self._start = optimum
+            self._start_kind = "mixed"
+            self._start_fallback = ", ".join(saturated)
+            return self._mixed(optimum, saturated, count)
         self._start_kind = "optimum"
         return self._start_positions(optimum, count, checked)
 
-    def _default_optimum(self) -> tuple[Optimum | None, str]:
-        """The one-start scipy optimum, or ``None`` and the reason it cannot be a start."""
+    def _default_optimum(self) -> tuple[Optimum | None, tuple[str, ...], str]:
+        """``(optimum, saturated, "")``, or ``(None, (), reason)`` when the optimiser cannot start.
+
+        *saturated* is :func:`~ampere.inference.saturated_bounds` of the mode —
+        the free labels pinned to a bound of their support, in layout order —
+        which :meth:`_ensemble_start` starts from the prior (W7.17).
+        """
         # Lazy: `_optimise` imports this module.
         from ._optimise import optimise, saturated_bounds
         from .exceptions import BoundSaturationWarning
 
         with warnings.catch_warnings():
-            # The engine says this itself, below, with the remedy for a run.
+            # A bound-pinned mode is handled below, not warned about.
             warnings.simplefilter("ignore", BoundSaturationWarning)
             try:
                 optimum = optimise(
@@ -837,18 +899,9 @@ class Engine(abc.ABC):
                 )
             except EngineError as error:
                 first = str(error).splitlines()[0]
-                return None, f"the optimiser found no start it could score ({first})."
-        saturated = saturated_bounds(self.problem, optimum.unconstrained)
-        if not saturated:
-            return optimum, ""
-        theta = self.problem.constrain(np.asarray(optimum.unconstrained, dtype=float))
-        labels = self.problem.parameters.free_labels()
-        at = ", ".join(f"{label} = {float(theta[labels.index(label)]):.4g}" for label in saturated)
-        return None, (
-            f"its mode sits on a bound of the prior's support ({at}), and a ball of walkers "
-            f"around a bound-pinned mode is degenerate: every walker stays on the bound. Widen "
-            f"or move the prior on {', '.join(saturated)} if the data push against it."
-        )
+                return None, (), f"the optimiser found no start it could score ({first})."
+        saturated = tuple(saturated_bounds(self.problem, optimum.unconstrained))
+        return optimum, saturated, ""
 
     def _refuse_optimum(self, options: Mapping[str, Any]) -> None:
         """Refuse ``initial=`` on a sampler that has no start (the nested samplers)."""
