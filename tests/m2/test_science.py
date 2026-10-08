@@ -210,6 +210,17 @@ def test_the_two_likelihoods_are_told_apart_by_their_provenance(study_results: A
         assert has_group is (kind == "flexible")
 
 
+def test_the_control_gp_fit_starts_mixed(
+    study_results: Any, study_default_start_warnings: list[str]
+) -> None:
+    """W7.17: the control's amplitude sits on its floor at the mode; the start is mixed, silent."""
+    flexible = study_results[("none", "flexible")]["run"].attrs
+    assert flexible["ampere_start_kind"] == "mixed"
+    assert AMPLITUDE in flexible["ampere_start_fallback"].split(", ")
+    assert study_results[("none", "standard")]["run"].attrs["ampere_start_kind"] == "optimum"
+    assert study_default_start_warnings == []
+
+
 # ---------------------------------------------------------------------------
 # The legacy cross-check: the same conclusion with legacy's kernel.
 # ---------------------------------------------------------------------------
