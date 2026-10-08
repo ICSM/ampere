@@ -167,6 +167,43 @@ stored and read back as ``<label>_<component>``.
 real coordinate by :func:`~ampere.results.gp_localisation_score`, using the
 same rule.
 
+**W7.7**: the palettes of the eight plotting functions, checked for colour-vision
+deficiency (2026-10-08; the method and the other measurements are on
+:doc:`accessibility`). The nine figures the documentation builds (they exercise four of the
+functions: residuals, localisation, posterior predictive and anomaly score) were
+simulated as deuteranopia and protanopia with the Machado, Oliveira and
+Fernandes (2009) severity-1.0 matrices on linearised sRGB, and eight remain
+readable, because each separates its elements by form, lightness or
+position as well as hue. The ninth, the many-lines study's lower panel, draws
+its three conditioned means in red, green and purple chosen by the figure
+script (not by the library), and under both simulations the red and green
+lines become two similar olive-brown lines that only the legend order
+distinguishes. :func:`~ampere.results.plot_corner` draws black
+histograms and contours with the truth lines in the ``corner`` package's
+default steel blue. :func:`~ampere.results.plot_posterior_predictive` draws
+the observed data and the observed ``T`` in black against a replicate band
+and median in matplotlib's default property cycle.
+:func:`~ampere.results.plot_residuals`,
+:func:`~ampere.results.plot_gp_localisation` and
+:func:`~ampere.results.plot_anomaly_score` draw one band and one line from
+that cycle over a grey (``0.6``) zero line, and
+:func:`~ampere.results.plot_sbc_ranks` one cycle-coloured histogram per
+panel over a grey null band (``0.85``) and expected line (``0.5``). Three
+functions rely on **hue alone** to separate things a reader must tell apart:
+:func:`~ampere.results.plot_trace` (one cycle colour per chain, in the trace
+and in the marginal histograms), :func:`~ampere.results.plot_coverage` (one
+cycle colour per parameter, every line with the same ``.`` marker, against a
+dashed grey diagonal and a black TARP line) and
+:func:`~ampere.results.plot_anomaly_score` when scores of several provenances
+share an axes (one cycle line each, identified by the legend). Under the
+simulations the cycle's blue and purple merge (CIE76 distance 8.0
+deuteranopia, 5.7 protanopia), green and red merge for deuteranopia (7.3),
+and orange and green for protanopia (4.6), so with five or more chains,
+parameters or provenances some pairs cannot be told apart. The remedy,
+recorded and not applied, is to vary the line style or marker with the colour
+(``cycler`` of colour and linestyle), or to use a colour-vision-safe cycle
+such as Okabe and Ito's.
+
 .. autodata:: ampere.results.diagnostics.WHITENESS_STREAM
 .. autodata:: ampere.results.diagnostics.GP_LOCALISATION_PROVENANCE
 .. autodata:: ampere.results.plots.GP_LOCALISATION_CAVEAT
