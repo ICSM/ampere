@@ -54,6 +54,19 @@ Unreleased
   moved in (``coordinates``). :func:`~ampere.inference.warm_start_gp`
   accepts a GP hyperparameter that a tie has renamed. See
   :doc:`optimisers`.
+* **emcee and zeus start from the optimiser's mode, and say when a run has
+  not converged.** ``run()`` with no ``initial=`` now runs
+  ``optimise(problem, method="scipy", starts=1)`` and starts the walkers
+  in a ball at its mode; ``initial="prior"`` restores the former prior
+  start exactly. An optimum on a prior bound, or no start the optimiser can
+  score, falls back to the prior with a
+  :class:`~ampere.inference.DefaultStartWarning`. The run records
+  ``ampere_start_kind`` (provenance schema 11).
+  :func:`ampere.results.check_convergence` gives a verdict on R-hat and
+  bulk ESS with a remedy in words, and ``emit`` and
+  :func:`~ampere.results.summary` warn with it when a chain-based run
+  fails; VI and SBI runs are never warned. An ensemble given sixteen or
+  more free parameters warns once, naming NUTS. See :doc:`faqs`.
 
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------

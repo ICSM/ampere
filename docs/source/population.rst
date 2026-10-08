@@ -164,7 +164,12 @@ evidence for the number worth stating precisely: at fifty well-measured
 members, the truth used to generate the sample sits inside the posterior's
 central 95 % interval on both ``objects.mu`` and ``objects.sigma``, and the
 posterior concentrates on the **sample's** mean and scatter rather than
-drifting toward the hyperprior's own location.
+drifting toward the hyperprior's own location. The ensemble engines are not
+the tool at this size: from sixteen free coordinates
+:class:`~ampere.inference.EmceeEngine` and :class:`~ampere.inference.ZeusEngine`
+warn once per run (:class:`~ampere.inference.EnsembleSizeWarning`), because a
+twenty-member population took eight minutes on the numpy path to reach R-hat
+1.23.
 
 Reweighting archived fits, when refitting jointly is not affordable
 ------------------------------------------------------------------------
