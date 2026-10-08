@@ -4,7 +4,7 @@
 this module is what W4.7 fills it with. It is backend-neutral in the sense
 ``ampere/core/kernels.py``'s :class:`~ampere.core.kernels.ArrayOps` already
 established for the GP kernels (W4.5): the mathematics is written **once**,
-against a two-method namespace (:class:`TranslationOps`) plus each parameter's
+against a small namespace (:class:`TranslationOps`) plus each parameter's
 own array type, and a backend supplies the namespace. It turns out to need far
 less than :class:`~ampere.core.kernels.ArrayOps` does, because every curated
 model here is a plain elementwise function of one coordinate axis, and
@@ -118,6 +118,7 @@ from astropy.modeling.models import (
 )
 
 from .exceptions import CapabilityError
+from .kernels import ArrayOps
 
 __all__ = [
     "LEAF_BUILDERS",
@@ -131,22 +132,19 @@ __all__ = [
 ]
 
 
-class TranslationOps(Protocol):
-    """The two elementwise operations, plus the Planck function, a curated formula needs.
+class TranslationOps(ArrayOps, Protocol):
+    """:class:`~ampere.core.kernels.ArrayOps`, plus the Planck function a curated formula needs.
 
-    Deliberately this small — see the module docstring for why ordinary
-    ``+ - * / **`` needs no namespace at all here, unlike
-    :class:`~ampere.core.kernels.ArrayOps`, which exists because a kernel's
-    algebra is richer.
+    The formulas themselves call only :meth:`exp`, :meth:`where` and
+    :meth:`blackbody` — see the module docstring for why ordinary
+    ``+ - * / **`` needs no namespace at all here. Until W7.13 this was a
+    private three-method protocol with a singleton implementation per backend;
+    it now **extends** the public :class:`~ampere.core.kernels.ArrayOps`
+    (widened by W7.13 to a model's namespace), so the native adapters'
+    implementations are subclasses of :class:`ampere.backends.jax.JaxOps` and
+    :class:`ampere.backends.torch.TorchOps` adding :meth:`blackbody` alone,
+    built per model on that model's own device (and, on torch, dtype).
     """
-
-    def exp(self, array: Any) -> Any:
-        """Elementwise exponential."""
-        ...
-
-    def where(self, condition: Any, if_true: Any, if_false: Any) -> Any:
-        """Elementwise select, both branches already evaluated (traceable on both backends)."""
-        ...
 
     def blackbody(self, wavelength: Any, temperature: Any) -> Any:
         """``B_nu(temperature)`` in Jy/sr, for *wavelength* already in this backend's own micron.

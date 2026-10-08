@@ -47,6 +47,7 @@ import astropy.units as u
 import numpy as np
 import scipy.stats as st
 
+from examples.portable_model.model import LinearModel as _PortableLinear
 from ampere.backends.reference import (
     Amplitude,
     BandwidthSmearing,
@@ -351,7 +352,41 @@ class ReferenceParameterSpace:
 # ---------------------------------------------------------------------------
 
 
-_MODELS = {ModelKind.LINEAR: LinearModel, ModelKind.POWER_LAW: PowerLawModel}
+class PortableLinearModel(_PortableLinear):
+    """The battery's ``PORTABLE_LINEAR`` kind: the guide's model, as this backend's twin (W7.13).
+
+    The model is ``examples/portable_model``'s one source, unchanged; only the
+    counter and the ``compiled=False`` opt-out the other kinds carry are
+    added, as a thin subclass. ``ModelSpec.plated`` is not offered here.
+    """
+
+    BACKEND: ClassVar[str] = "reference"
+
+    def __init__(self, spec: ModelSpec) -> None:
+        if spec.plated:
+            raise ValueError("ModelKind.PORTABLE_LINEAR declares no plate.")
+        super().__init__(spec.coordinates, channels=spec.channels)
+        self.spec = spec
+        self.evaluations = 0
+
+    def reset_evaluations(self) -> None:
+        self.evaluations = 0
+
+    def compile_for(self, requirements: Mapping[str, Any]) -> Model:
+        if not self.spec.compiled:
+            return Model.compile_for(self, requirements)
+        return super().compile_for(requirements)
+
+    def evaluate(self, **values: Any) -> ModelResult:
+        self.evaluations += 1
+        return super().evaluate(**values)
+
+
+_MODELS = {
+    ModelKind.LINEAR: LinearModel,
+    ModelKind.POWER_LAW: PowerLawModel,
+    ModelKind.PORTABLE_LINEAR: PortableLinearModel,
+}
 _KERNELS: dict[KernelFamily, type[Kernel]] = {
     KernelFamily.MATERN12: Matern12,
     KernelFamily.MATERN32: Matern32,

@@ -49,6 +49,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from ampere.core import ArrayOps
+from ampere.core import PortableModel as _CorePortableModel
 from ampere.core import (
     DTYPE,
     ChannelRequirements,
@@ -60,6 +62,7 @@ from ampere.core.exceptions import TransformationError
 
 from ._config import BACKEND, require_x64
 from ._declare import as_parameter
+from .gp import JaxOps
 from ._device import DEVICE, device_flag, place_on, resolve_device
 
 __all__ = [
@@ -67,6 +70,7 @@ __all__ = [
     "FLUX_UNIT",
     "BlackBody",
     "ModifiedBlackBody",
+    "PortableModel",
     "PowerLaw",
     "planck_jy",
 ]
@@ -410,3 +414,38 @@ def _to_micron(coordinates: Any) -> np.ndarray:
     if isinstance(coordinates, u.Quantity):
         return np.asarray(coordinates.to_value(COORDINATE_UNIT), dtype=DTYPE)
     return np.asarray(coordinates, dtype=DTYPE)
+
+
+class PortableModel(_CorePortableModel):
+    """:class:`ampere.core.PortableModel` on jax: the twin base a user's one-line twin inherits.
+
+    Sets the namespace to :class:`~ampere.backends.jax.JaxOps` (float64, the
+    default device) and the four capability flags, and checks the x64 policy
+    (:func:`~ampere.backends.jax.require_x64`) before anything else is built.
+    A user's model, written once on :class:`ampere.core.PortableModel`, runs
+    here as::
+
+        class JaxLinear(ampere.backends.jax.PortableModel, Linear):
+            pass
+
+    with this base listed **first**, so its :attr:`OPS` and flags come before
+    the user's class in the MRO and the user's ``__init__`` and ``_flux``
+    before :class:`ampere.core.PortableModel`'s.
+
+    ``BATCHABLE`` is ``True`` for the reason it is on this backend's shipped
+    models: ``jax.vmap`` maps a ``_flux`` written in whole-array arithmetic as
+    it maps any pure function. A ``_flux`` that indexes or branches by a
+    parameter's value breaks that, and should say ``BATCHABLE = False``.
+    Placement is not this base's business (``DEVICE`` stays ``"cpu"``); the
+    shipped ``_SpectralModel`` is the base that takes ``device=``.
+    """
+
+    OPS: ClassVar[ArrayOps] = JaxOps()
+    DIFFERENTIABLE: ClassVar[bool] = True
+    BATCHABLE: ClassVar[bool] = True
+    DEVICE: ClassVar[str] = "cpu"
+    BACKEND: ClassVar[str] = BACKEND
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        require_x64(f"a jax {type(self).__name__}")
+        super().__init__(*args, **kwargs)

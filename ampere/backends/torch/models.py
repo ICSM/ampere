@@ -50,6 +50,8 @@ import astropy.units as u
 import numpy as np
 import torch
 
+from ampere.core import ArrayOps
+from ampere.core import PortableModel as _CorePortableModel
 from ampere.core import (
     DTYPE,
     ChannelRequirements,
@@ -59,6 +61,7 @@ from ampere.core import (
 )
 from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, move, place, to_numpy
 from ._declare import as_parameter
+from .gp import TorchOps
 from .parameters import LoweredParameters
 
 __all__ = [
@@ -66,6 +69,7 @@ __all__ = [
     "FLUX_UNIT",
     "BlackBody",
     "ModifiedBlackBody",
+    "PortableModel",
     "PowerLaw",
     "TorchSpectralModel",
     "planck_jy",
@@ -431,3 +435,36 @@ def _to_micron(coordinates: Any) -> np.ndarray:
     if isinstance(coordinates, torch.Tensor):
         return to_numpy(coordinates).astype(DTYPE, copy=False)
     return np.asarray(coordinates, dtype=DTYPE)
+
+
+class PortableModel(_CorePortableModel):
+    """:class:`ampere.core.PortableModel` on torch: the twin base a user's one-line twin inherits.
+
+    Sets the namespace to :class:`~ampere.backends.torch.TorchOps` on this
+    backend's defaults (float64 on the CPU, never
+    ``torch.get_default_dtype()``) and the four capability flags. A user's
+    model, written once on :class:`ampere.core.PortableModel`, runs here as::
+
+        class TorchLinear(ampere.backends.torch.PortableModel, Linear):
+            pass
+
+    with this base listed **first**, so its :attr:`OPS` and flags come before
+    the user's class in the MRO and the user's ``__init__`` and ``_flux``
+    before :class:`ampere.core.PortableModel`'s.
+
+    ``BATCHABLE`` means ``torch.func.vmap`` over :meth:`native_flux`, which
+    holds for a ``_flux`` written in whole-array arithmetic; one that indexes
+    or branches by a parameter's value (or calls ``.item()``) breaks it and
+    should say ``BATCHABLE = False``. Per-instance ``dtype=``/``device=`` and
+    ``.to(...)`` are not this base's business: :class:`TorchSpectralModel` is
+    the base that carries them.
+    """
+
+    OPS: ClassVar[ArrayOps] = TorchOps(DEFAULT_DTYPE, DEFAULT_DEVICE)
+    DIFFERENTIABLE: ClassVar[bool] = True
+    BATCHABLE: ClassVar[bool] = True
+    DEVICE: ClassVar[str] = "cpu"
+    BACKEND: ClassVar[str] = BACKEND
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)

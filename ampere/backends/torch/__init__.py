@@ -198,6 +198,7 @@ from .gp import (
     SpectralMixture,
     SquaredExponential,
     Sum,
+    TorchOps,
     WarpedKernel,
 )
 from .astrometry import (
@@ -244,6 +245,7 @@ from .models import (
     FLUX_UNIT,
     BlackBody,
     ModifiedBlackBody,
+    PortableModel,
     PowerLaw,
     TorchSpectralModel,
     planck_jy,
@@ -308,6 +310,7 @@ __all__ = [
     "ModifiedBlackBody",
     "NativeAstropyModel",
     "PSFConvolution",
+    "PortableModel",
     "PowerLaw",
     "Product",
     "QuasisepGP",
@@ -323,6 +326,7 @@ __all__ = [
     "TimeSmearing",
     "TorchImageStep",
     "TorchInterferometryStep",
+    "TorchOps",
     "TorchParameterSpace",
     "TorchSpectralModel",
     "UniformDisc",

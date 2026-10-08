@@ -68,6 +68,7 @@ from ampere.core.exceptions import CompositionError, TransformationError
 
 from ._config import BACKEND, require_x64
 from ._device import DEVICE, device_flag, place_on, resolve_device
+from .gp import JaxOps
 from .models import planck_jy
 
 __all__ = ["TRANSLATIONS", "NativeAstropyModel", "from_astropy"]
@@ -85,20 +86,16 @@ __all__ = ["TRANSLATIONS", "NativeAstropyModel", "from_astropy"]
 TRANSLATIONS: dict[type, Any] = dict(LEAF_BUILDERS)
 
 
-class _JaxOps:
-    """:class:`~ampere.core.astropy_translations.TranslationOps` in jax."""
+class _JaxOps(JaxOps):
+    """:class:`~ampere.core.astropy_translations.TranslationOps` in jax.
 
-    def exp(self, array: Any) -> Any:
-        return jnp.exp(array)
-
-    def where(self, condition: Any, if_true: Any, if_false: Any) -> Any:
-        return jnp.where(condition, if_true, if_false)
+    The public :class:`~ampere.backends.jax.JaxOps` (W7.13) plus :meth:`blackbody`,
+    built once per :class:`NativeAstropyModel` on that model's own device
+    rather than shared as a module singleton.
+    """
 
     def blackbody(self, wavelength: Any, temperature: Any) -> Any:
         return planck_jy(wavelength, temperature)
-
-
-_OPS = _JaxOps()
 
 
 class NativeAstropyModel(Model):
@@ -164,6 +161,7 @@ class NativeAstropyModel(Model):
         resolved = resolve_device(DEVICE, "a jax NativeAstropyModel", error=TransformationError)
         object.__setattr__(self, "_resolved_device", resolved)
         object.__setattr__(self, "DEVICE", device_flag(DEVICE, resolved))
+        object.__setattr__(self, "_ops", _JaxOps(resolved))
         self._axis_grid_array: jax.Array = jnp.zeros(0, dtype=jnp.float64)
         self._leaf_grids: tuple[jax.Array, ...] = ()
         self._factor_array: jax.Array = jnp.asarray(1.0, dtype=jnp.float64)
@@ -235,7 +233,7 @@ class NativeAstropyModel(Model):
         self._check_grid()
         context = self.context(values)
         leaf_arrays = [
-            _evaluate_leaf(plan, grid, context)
+            _evaluate_leaf(self._ops, plan, grid, context)
             for plan, grid in zip(self._leaves, self._leaf_grids, strict=True)
         ]
         return self._combine(leaf_arrays) * self._factor_array
@@ -271,11 +269,13 @@ class NativeAstropyModel(Model):
         )
 
 
-def _evaluate_leaf(plan: LeafPlan, grid: jax.Array, context: Mapping[str, Any]) -> jax.Array:
+def _evaluate_leaf(
+    ops: _JaxOps, plan: LeafPlan, grid: jax.Array, context: Mapping[str, Any]
+) -> jax.Array:
     params = dict(
         zip(plan.formula.param_names, (context[name] for name in plan.context_names), strict=True)
     )
-    return plan.formula.compute(_OPS, grid, **params)
+    return plan.formula.compute(ops, grid, **params)
 
 
 def from_astropy(

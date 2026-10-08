@@ -140,6 +140,7 @@ import scipy.stats as st
 
 from ampere.core import (
     DTYPE,
+    ArrayOps,
     ChannelRequirements,
     Dataset,
     DatasetCollection,
@@ -157,8 +158,6 @@ from .emulator import (
     EMULATOR_FILE,
     NUMPY_OPS,
     ChannelPlan,
-    Ops,
-    _to_numpy,
     as_parameter,
     channel_plan,
     emulator_arrays,
@@ -247,7 +246,7 @@ class PhoenixStar(Model):
         Buffers (see the module docstring); ``promote_buffer`` frees either.
     """
 
-    OPS: ClassVar[Ops] = NUMPY_OPS
+    OPS: ClassVar[ArrayOps] = NUMPY_OPS
     CHANNELS: ClassVar[tuple[str, ...]] = ("sed", "rvs")
     AXIS: ClassVar[str] = "spectral_axis"
 
@@ -349,7 +348,7 @@ class PhoenixStar(Model):
                 ctx["a_v"],
                 ctx["r_v"],
             )
-            flux = np.asarray(_to_numpy(10.0**log_flux), dtype=DTYPE)
+            flux = np.asarray(self.OPS.to_numpy(10.0**log_flux), dtype=DTYPE)
             emitted[channel] = self.templates[channel].with_values(flux)
         return ModelResult(emitted)
 

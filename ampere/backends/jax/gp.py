@@ -252,6 +252,10 @@ class JaxOps:
 
     One instance per kernel, because the device is per instance since W2.5
     slice 3.
+
+    **Public since W7.13**, and a model's namespace as well as a kernel's: the
+    eleven methods after :meth:`log` are what
+    :class:`ampere.backends.jax.PortableModel` writes a forward model against.
     """
 
     def __init__(self, device: Any = None) -> None:
@@ -308,6 +312,41 @@ class JaxOps:
 
     def log(self, array: Any) -> jax.Array:
         return jnp.log(jnp.asarray(array, dtype=jnp.float64))
+
+    # -- W7.13: the model half of the protocol ----------------------------
+
+    def asarray(self, value: Any) -> jax.Array:
+        return place_on(jnp.asarray(value, dtype=jnp.float64), self.device)
+
+    def asindex(self, value: Any) -> jax.Array:
+        return place_on(jnp.asarray(value, dtype=jnp.int64), self.device)
+
+    def to_numpy(self, array: Any) -> np.ndarray:
+        return np.asarray(array)
+
+    def where(self, condition: Any, if_true: Any, if_false: Any) -> jax.Array:
+        return jnp.where(condition, if_true, if_false)
+
+    def interp(self, x: Any, xp: Any, fp: Any) -> jax.Array:
+        return jnp.interp(x, xp, fp)
+
+    def cumsum(self, array: Any, axis: int = -1) -> jax.Array:
+        return jnp.cumsum(jnp.asarray(array, dtype=jnp.float64), axis=axis)
+
+    def trapezoid(self, y: Any, x: Any, axis: int = -1) -> jax.Array:
+        return jnp.trapezoid(y, x, axis=axis)
+
+    def power(self, base: Any, exponent: Any) -> jax.Array:
+        return jnp.power(jnp.asarray(base, dtype=jnp.float64), exponent)
+
+    def clip(self, array: Any, low: Any, high: Any) -> jax.Array:
+        return jnp.clip(array, low, high)
+
+    def log10(self, array: Any) -> jax.Array:
+        return jnp.log10(jnp.asarray(array, dtype=jnp.float64))
+
+    def sum(self, array: Any, axis: int | None = None) -> jax.Array:
+        return jnp.sum(array, axis=axis)
 
 
 class _JaxKernel(Kernel):

@@ -81,6 +81,17 @@ Unreleased
   photometry (twenty-one points, ``build_problem(limits=True)`` by default;
   ``limits=False`` is the nineteen of before). :doc:`photometry_spectra`
   gains the worked censoring example.
+* **Writing a model once for three backends.** :class:`ampere.core.ArrayOps`
+  is widened from a kernel's namespace to a model's (``asarray``,
+  ``asindex``, ``to_numpy``, ``where``, ``interp``, ``cumsum``,
+  ``trapezoid``, ``power``, ``clip``, ``log10``, ``sum``), with
+  :class:`~ampere.backends.jax.JaxOps` and
+  :class:`~ampere.backends.torch.TorchOps` now public.
+  :class:`ampere.core.PortableModel` is a base whose one method ``_flux`` is
+  written against it; ``ampere.backends.jax.PortableModel`` and
+  ``ampere.backends.torch.PortableModel`` make a native twin one line. The
+  new guide :doc:`notebooks/portable_model` rewrites the quickstart's model
+  on it and fits it with emcee on numpy and NUTS on jax.
 
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------

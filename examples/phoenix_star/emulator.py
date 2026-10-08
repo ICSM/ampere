@@ -6,8 +6,10 @@ spectra and one Gaussian process per PCA weight over (Teff, log g, [Fe/H]).
 This module loads it (:func:`load_emulator`) and evaluates it
 (:func:`log_shape`): the GP predictive mean ``k(x, X) alpha`` of every weight at
 the standardised input, then ``mean + weights @ basis``. That arithmetic is
-written once, against an array namespace (:class:`Ops`) -- ``numpy`` here,
-``torch`` in :mod:`.emulator_torch`, ``jax.numpy`` in :mod:`.emulator_jax` --
+written once, against an array namespace (:class:`ampere.core.ArrayOps`, the
+public protocol since W7.13) -- :class:`~ampere.core.NumpyOps` here,
+:class:`~ampere.backends.torch.TorchOps` in :mod:`.emulator_torch`,
+:class:`~ampere.backends.jax.JaxOps` in :mod:`.emulator_jax` --
 so the three backends run literally the same sequence of ``exp``, ``sum`` and
 ``matmul``, and cannot drift. It uses only operations all three spell alike.
 
@@ -81,7 +83,7 @@ import numpy as np
 import scipy.stats as st
 from astropy import constants
 
-from ampere.core import DTYPE, Model, ModelResult, Parameter, Spectrum
+from ampere.core import DTYPE, ArrayOps, Model, ModelResult, NumpyOps, Parameter, Spectrum
 
 __all__ = [
     "EMULATOR_FILE",
@@ -90,7 +92,6 @@ __all__ = [
     "NUMPY_OPS",
     "ChannelPlan",
     "EmulatorArrays",
-    "Ops",
     "PhoenixEmulator",
     "as_parameter",
     "ccm89_ab",
@@ -155,41 +156,31 @@ def load_emulator(path: str | Path = EMULATOR_FILE) -> EmulatorArrays:
     return EmulatorArrays(provenance=provenance, **arrays)
 
 
-class Ops:
-    """The handful of array operations the emulator needs, for one backend.
-
-    ``asarray`` makes a float array of the backend's own kind (float64);
-    ``asindex`` an integer one for gathers. ``xp`` is the namespace whose
-    ``exp``, ``log10``, ``sum`` and ``stack`` are called.
-    """
-
-    def __init__(self, xp: Any, asarray: Any, asindex: Any) -> None:
-        self.xp = xp
-        self.asarray = asarray
-        self.asindex = asindex
+#: The reference namespace: the public :class:`~ampere.core.NumpyOps` (W7.13
+#: folded this example's own ``Ops`` class onto it). ``asarray`` makes a
+#: float64 array, ``asindex`` an integer one for gathers; ``exp``, ``log10``,
+#: ``sum`` and ``stack`` are the arithmetic.
+NUMPY_OPS: ArrayOps = NumpyOps()
 
 
-NUMPY_OPS = Ops(np, lambda a: np.asarray(a, dtype=DTYPE), lambda a: np.asarray(a, dtype=np.int64))
-
-
-def log_shape(ops: Ops, arrays: dict[str, Any], teff: Any, logg: Any, feh: Any) -> Any:
+def log_shape(ops: ArrayOps, arrays: dict[str, Any], teff: Any, logg: Any, feh: Any) -> Any:
     """``log10`` of the unit-bolometric shape on segments A and B concatenated.
 
     *arrays* holds ``mean``, ``basis``, ``nodes``, ``alpha``, ``lengths``,
     ``amplitude``, ``centre`` and ``spread`` already converted by *ops*.
     """
-    xp = ops.xp
-    x = (xp.stack([ops.asarray(teff), ops.asarray(logg), ops.asarray(feh)]) - arrays["centre"]) / (
-        arrays["spread"]
-    )
+    x = (
+        ops.stack([ops.asarray(teff), ops.asarray(logg), ops.asarray(feh)], axis=0)
+        - arrays["centre"]
+    ) / arrays["spread"]
     # (K, m, 3): every component's scaled distance to every node.
     d = (x - arrays["nodes"])[None, :, :] / arrays["lengths"][:, None, :]
-    k = arrays["amplitude"][:, None] ** 2 * xp.exp(-0.5 * xp.sum(d**2, -1))
-    weights = xp.sum(k * arrays["alpha_t"], -1)
+    k = arrays["amplitude"][:, None] ** 2 * ops.exp(-0.5 * ops.sum(d**2, -1))
+    weights = ops.sum(k * arrays["alpha_t"], -1)
     return arrays["mean"] + weights @ arrays["basis"]
 
 
-def emulator_arrays(ops: Ops, data: EmulatorArrays) -> dict[str, Any]:
+def emulator_arrays(ops: ArrayOps, data: EmulatorArrays) -> dict[str, Any]:
     """*data*'s arrays in *ops*' kind, in the layout :func:`log_shape` reads."""
     return {
         "mean": ops.asarray(data.mean),
@@ -312,7 +303,7 @@ def channel_plan(
     return ChannelPlan(target, segment, source_offset, i0, i1, w0, w1, offset, a, b)
 
 
-def plan_arrays(ops: Ops, plan: ChannelPlan) -> dict[str, Any]:
+def plan_arrays(ops: ArrayOps, plan: ChannelPlan) -> dict[str, Any]:
     """*plan*'s arrays in *ops*' kind."""
     out = {
         "source_offset": ops.asarray(plan.source_offset),
@@ -329,7 +320,7 @@ def plan_arrays(ops: Ops, plan: ChannelPlan) -> dict[str, Any]:
 
 
 def star_log_flux(
-    ops: Ops,
+    ops: ArrayOps,
     plan: ChannelPlan,
     arrays: dict[str, Any],
     shape: Any,
@@ -345,11 +336,10 @@ def star_log_flux(
     extinction term is added when *plan* carries CCM89 coefficients and *a_v*
     is given.
     """
-    xp = ops.xp
     source = shape[plan.segment] + arrays["source_offset"]
     log_flux = arrays["w0"] * source[arrays["i0"]] + arrays["w1"] * source[arrays["i1"]]
     log_flux = log_flux + arrays["offset"]
-    log_flux = log_flux + ops.asarray(log_luminosity) - 2.0 * xp.log10(ops.asarray(distance))
+    log_flux = log_flux + ops.asarray(log_luminosity) - 2.0 * ops.log10(ops.asarray(distance))
     if a_v is not None and "ccm_a" in arrays:
         extinction = ops.asarray(a_v) * (arrays["ccm_a"] + arrays["ccm_b"] / ops.asarray(r_v))
         log_flux = log_flux - 0.4 * extinction
@@ -382,7 +372,7 @@ class PhoenixEmulator(Model):
     the capability flags.
     """
 
-    OPS: ClassVar[Ops] = NUMPY_OPS
+    OPS: ClassVar[ArrayOps] = NUMPY_OPS
     UNIT: ClassVar[Any] = u.AA**-1
 
     def __init__(
@@ -422,13 +412,6 @@ class PhoenixEmulator(Model):
     def evaluate(self, **values: Any) -> ModelResult:
         emitted = {}
         for channel in SEGMENTS:
-            flux = np.asarray(_to_numpy(self.flux(channel, values)), dtype=DTYPE)
+            flux = np.asarray(self.OPS.to_numpy(self.flux(channel, values)), dtype=DTYPE)
             emitted[channel] = self.templates[channel].with_values(flux)
         return ModelResult(emitted)
-
-
-def _to_numpy(value: Any) -> np.ndarray:
-    """numpy from any backend's array (a torch tensor is detached first)."""
-    if hasattr(value, "detach"):
-        value = value.detach().cpu()
-    return np.asarray(value)

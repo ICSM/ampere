@@ -191,6 +191,10 @@ class TorchOps:
     gave: a kernel placed on a GPU and handed coordinates that are already
     there must not have them silently copied back, which a module-level default
     device would do once per evaluation, invisibly.
+
+    **Public since W7.13**, and a model's namespace as well as a kernel's: the
+    eleven methods after :meth:`log` are what
+    :class:`ampere.backends.torch.PortableModel` writes a forward model against.
     """
 
     def __init__(self, dtype: torch.dtype, device: torch.device) -> None:
@@ -248,6 +252,53 @@ class TorchOps:
 
     def log(self, array: Any) -> torch.Tensor:
         return torch.log(self.scalar(array))
+
+    # -- W7.13: the model half of the protocol ----------------------------
+
+    def asarray(self, value: Any) -> torch.Tensor:
+        return as_tensor(value, dtype=self.dtype, device=self.device)
+
+    def asindex(self, value: Any) -> torch.Tensor:
+        if isinstance(value, torch.Tensor):
+            return value.to(dtype=torch.int64, device=self.device)
+        return torch.as_tensor(np.asarray(value, dtype=np.int64), device=self.device)
+
+    def to_numpy(self, array: Any) -> np.ndarray:
+        return to_numpy(array)
+
+    def where(self, condition: Any, if_true: Any, if_false: Any) -> torch.Tensor:
+        mask = torch.as_tensor(condition, device=self.device)
+        return torch.where(mask, self.scalar(if_true), self.scalar(if_false))
+
+    def interp(self, x: Any, xp: Any, fp: Any) -> torch.Tensor:
+        # torch has no ``interp``: locate each x's bracket with ``searchsorted``
+        # and interpolate linearly, clamping outside [xp[0], xp[-1]] to the end
+        # values exactly as numpy.interp does.
+        x, xp, fp = self.scalar(x), self.scalar(xp), self.scalar(fp)
+        upper = torch.clamp(torch.searchsorted(xp, x.contiguous()), 1, int(xp.shape[-1]) - 1)
+        lower = upper - 1
+        x0, x1, f0, f1 = xp[lower], xp[upper], fp[lower], fp[upper]
+        weight = torch.clamp((x - x0) / (x1 - x0), 0.0, 1.0)
+        return f0 + weight * (f1 - f0)
+
+    def cumsum(self, array: Any, axis: int = -1) -> torch.Tensor:
+        return torch.cumsum(self.scalar(array), dim=axis)
+
+    def trapezoid(self, y: Any, x: Any, axis: int = -1) -> torch.Tensor:
+        return torch.trapezoid(self.scalar(y), self.scalar(x), dim=axis)
+
+    def power(self, base: Any, exponent: Any) -> torch.Tensor:
+        return torch.pow(self.scalar(base), exponent)
+
+    def clip(self, array: Any, low: Any, high: Any) -> torch.Tensor:
+        return torch.clamp(self.scalar(array), low, high)
+
+    def log10(self, array: Any) -> torch.Tensor:
+        return torch.log10(self.scalar(array))
+
+    def sum(self, array: Any, axis: int | None = None) -> torch.Tensor:
+        tensor = self.scalar(array)
+        return torch.sum(tensor) if axis is None else torch.sum(tensor, dim=axis)
 
 
 class _TorchKernel(Kernel):

@@ -97,6 +97,7 @@ from .gp import (
     SHO,
     DenseGP,
     HilbertSpaceGP,
+    JaxOps,
     Matern12,
     Matern32,
     Matern52,
@@ -125,7 +126,15 @@ from .interferometry import (
     UniformDisc,
     UniformDiscVisibilities,
 )
-from .models import COORDINATE_UNIT, FLUX_UNIT, BlackBody, ModifiedBlackBody, PowerLaw, planck_jy
+from .models import (
+    COORDINATE_UNIT,
+    FLUX_UNIT,
+    BlackBody,
+    ModifiedBlackBody,
+    PortableModel,
+    PowerLaw,
+    planck_jy,
+)
 from .noise import (
     FractionalModelGPNoise,
     FractionalModelNoise,
@@ -171,6 +180,7 @@ __all__ = [
     "GaussianSourceVisibilities",
     "HilbertSpaceGP",
     "IndependentNoise",
+    "JaxOps",
     "JointGaussianProcessNoise",
     "LSFConvolution",
     "LoweredParameterSet",
@@ -183,6 +193,7 @@ __all__ = [
     "ModifiedBlackBody",
     "NativeAstropyModel",
     "PSFConvolution",
+    "PortableModel",
     "PowerLaw",
     "Product",
     "QuasisepGP",

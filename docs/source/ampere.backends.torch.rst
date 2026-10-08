@@ -10,6 +10,12 @@ Requires the ``torch`` extra (:doc:`install`)::
 
     pip install ampere-astro[torch]
 
+A model of your own runs here through
+:class:`~ampere.backends.torch.PortableModel`, the twin base of
+:class:`ampere.core.PortableModel`, whose ``_flux`` is written against
+:class:`~ampere.backends.torch.TorchOps` (the torch
+:class:`~ampere.core.ArrayOps`); see :doc:`notebooks/portable_model`.
+
 .. note::
 
    This page is built in an environment that does not have torch installed,
