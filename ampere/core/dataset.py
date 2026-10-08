@@ -147,6 +147,7 @@ from .likelihood import (
     Likelihood,
     Marginalisation,
     NoiseModel,
+    align_by_filter,
 )
 from .parameter import (
     SEPARATOR,
@@ -157,7 +158,7 @@ from .parameter import (
     Tie,
     Value,
 )
-from .results_schema import FunctionSamples, ModelResult
+from .results_schema import FunctionSamples, ModelResult, PhotometricPoints
 from .rng import SEED_BYTES
 from .rng import generator as _generator
 from .realisation import realise, sample_observations_of, simulate_batched_of
@@ -1403,7 +1404,18 @@ class Dataset:
         carries. Not optional: it is where an unimplemented latent combination
         is refused, so skipping it silently accepts a problem that cannot be
         evaluated.
+
+        :class:`~ampere.core.PhotometricPoints` align by filter name (W7.15):
+        the observed container is replaced, once, by its re-keying onto the
+        chain's filters and wavelengths (:func:`~ampere.core.likelihood.align_by_filter`),
+        so every consumer of :attr:`observed` sees the step's own axis.
         """
+        if isinstance(predicted, PhotometricPoints) and isinstance(
+            self.observed, PhotometricPoints
+        ):
+            self.observed = align_by_filter(
+                predicted, self.observed, censored=self.likelihood.censoring is not None
+            )
         self.likelihood.check_alignment(predicted, self.observed)
         self._resolve_mask(predicted)
         retained = self._retained_reference or 0
