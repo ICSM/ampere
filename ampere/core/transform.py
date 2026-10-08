@@ -69,8 +69,15 @@ import astropy.units as u
 import numpy as np
 
 from .exceptions import CompositionError, TransformationError
+from .kernels import ArrayOps, NumpyOps
 from .parameter import Parameter, ParameterMapping, ParameterSet, Parameterised, Value
-from .results_schema import COORDINATE_RTOL, DEFAULT_CHANNEL, FunctionSamples, ModelResult
+from .results_schema import (
+    COORDINATE_RTOL,
+    DEFAULT_CHANNEL,
+    FunctionSamples,
+    ModelResult,
+    Spectrum,
+)
 
 __all__ = [
     "COORDINATE_RTOL",
@@ -78,6 +85,7 @@ __all__ = [
     "ChannelRequirements",
     "Instrument",
     "Model",
+    "PortableModel",
     "Transformation",
     "negotiate",
     "propagate_mask",
@@ -1593,3 +1601,196 @@ def _supplied(
             resolved.update(values)
         return resolved
     return values
+
+
+# ---------------------------------------------------------------------------
+# W7.13: the portable model
+# ---------------------------------------------------------------------------
+
+
+class PortableModel(Model):
+    """A spectral model written once against :class:`~ampere.core.ArrayOps`, run on three backends.
+
+    Most users write a :class:`Model` subclass, and before W7.13 the answer to
+    "how do I run it on jax" was to write it again. This base is the answer
+    instead: a subclass declares its parameters in ``__init__`` and writes the
+    one method :meth:`_flux` against :attr:`ops` — never ``np.`` directly, and
+    never ``float(...)`` on a parameter — and the same source then runs on
+    numpy (this class, :class:`~ampere.core.NumpyOps`), on jax
+    (:class:`ampere.backends.jax.PortableModel`) and on torch
+    (:class:`ampere.backends.torch.PortableModel`). A native twin is one line,
+    the twin base listed first so that its :attr:`OPS` and capability flags
+    win::
+
+        class Linear(PortableModel):
+            def __init__(self, wavelength, *, channels="default"):
+                super().__init__(wavelength, channels=channels)
+                self.register_parameter(Parameter("slope", st.uniform(-10, 20)))
+                self.register_parameter(Parameter("intercept", st.uniform(-10, 20)))
+
+            def _flux(self, grid, context):
+                return context["slope"] * grid + context["intercept"]
+
+
+        class JaxLinear(ampere.backends.jax.PortableModel, Linear):
+            pass
+
+    ``__init__`` must therefore be **cooperative**: a subclass calls
+    ``super().__init__(wavelength, channels=channels)``, so that the twin
+    base's own ``__init__`` (jax's checks the x64 policy) runs first and this
+    one last.
+
+    What the base does for the subclass:
+
+    * the ``wavelength`` buffer (micron; a :class:`~astropy.units.Quantity` is
+      converted) and the channel names;
+    * :meth:`compile_for`, adopting each channel's negotiated
+      ``spectral_axis`` grid into a :class:`~ampere.core.Spectrum` template
+      (Jy) and into :attr:`grids` as the namespace's own array — the model's
+      own grid when nothing was negotiated;
+    * the native surface the jax and torch realisations look for,
+      :meth:`native_grid` and :meth:`native_flux`, returning the namespace's
+      arrays, so that a gradient passes through;
+    * :meth:`evaluate`, the contract surface, which converts each channel's
+      flux back to numpy with :meth:`ArrayOps.to_numpy` at the container
+      boundary.
+
+    In :meth:`_flux`, ``grid`` is already the namespace's array, and
+    ``context`` is :meth:`portable_context`: every parameter value — and every
+    floating-point buffer — passed through :meth:`ArrayOps.asarray`, so a
+    float on the contract path, a jax tracer and a torch tensor all arrive as
+    the backend's array. That conversion is what removes the ``float(...)``
+    casts a numpy-only model needs.
+
+    **What this base does not do.** It places nothing on an accelerator and
+    carries no per-instance dtype: :attr:`DEVICE` stays ``"cpu"`` and the
+    namespace is a class attribute. A model that needs ``device=`` or
+    ``dtype=`` per instance is what the shipped spectral bases are for —
+    ``ampere.backends.jax.models._SpectralModel`` and
+    :class:`ampere.backends.torch.TorchSpectralModel` — which is why the
+    shipped ``BlackBody`` and its kin re-declare their arithmetic per backend
+    rather than inherit from here.
+    """
+
+    #: The requirement name this model answers in :meth:`compile_for`.
+    AXIS: ClassVar[str] = "spectral_axis"
+    #: The array namespace :meth:`_flux` is written against. A twin base
+    #: replaces it; nothing else changes.
+    OPS: ClassVar[ArrayOps] = NumpyOps()
+
+    def __init__(self, wavelength: Any, *, channels: str | Sequence[str] = "default") -> None:
+        grid = _as_micron(wavelength)
+        if grid.ndim != 1 or grid.size == 0:
+            raise TransformationError(
+                f"{type(self).__name__} needs a one-dimensional, non-empty wavelength grid, got "
+                f"shape {grid.shape}."
+            )
+        names = (channels,) if isinstance(channels, str) else tuple(str(c) for c in channels)
+        if not names or len(set(names)) != len(names):
+            raise TransformationError(
+                f"{type(self).__name__} needs distinct, non-empty channel names, got {names!r}."
+            )
+        self.channels: tuple[str, ...] = names
+        self.register_buffer("wavelength", grid, unit=u.micron)
+        self.templates: dict[str, Any] = {}
+        #: Each channel's evaluation grid as the namespace's array, built
+        #: outside any trace (a jax array made inside a jitted function is a
+        #: tracer, and an instrument step reads the grid in numpy).
+        self.grids: dict[str, Any] = {}
+        for channel in names:
+            self._adopt(channel, grid)
+
+    @property
+    def ops(self) -> ArrayOps:
+        """The array namespace this instance computes in: the class's :attr:`OPS`."""
+        return self.OPS
+
+    def _adopt(self, channel: str, grid: np.ndarray) -> None:
+        self.templates[channel] = Spectrum(
+            grid * u.micron, np.zeros(grid.size, dtype=np.float64), unit=u.Jy
+        )
+        self.grids[channel] = self.ops.asarray(grid)
+
+    def compile_for(self, requirements: Mapping[str, ChannelRequirements]) -> Model:
+        """Adopt each channel's negotiated grid, once, as a template and as a namespace array."""
+        for channel in self.channels:
+            asked = requirements.get(channel)
+            if asked is None or self.AXIS not in asked:
+                continue
+            self._adopt(channel, _as_micron(asked[self.AXIS].coordinates()))
+        return self
+
+    @abc.abstractmethod
+    def _flux(self, grid: Any, context: Mapping[str, Any]) -> Any:
+        """The model's flux in Jy on *grid* (micron), written against :attr:`ops`.
+
+        The one method a subclass writes. *grid* is the namespace's array;
+        *context* holds every buffer and parameter value by name, each
+        parameter (and each floating-point buffer) already the namespace's
+        array. Use ordinary arithmetic and :attr:`ops`' functions: code that
+        branches on a parameter's value (``if context["t"] > 0``) or converts
+        one (``float(...)``) will not trace.
+        """
+
+    def portable_context(
+        self, values: Mapping[str, Any] | ArrayLike | None = None
+    ) -> dict[str, Any]:
+        """:meth:`~ampere.core.Parameterised.context`, every value as the namespace's array.
+
+        Parameters always; buffers when they are floating point (an integer or
+        boolean buffer is left as declared, for :meth:`ArrayOps.asindex` or a
+        mask).
+        """
+        context = self.context(values)
+        buffers = self.buffers.values()
+        ops = self.ops
+        return {
+            name: (
+                ops.asarray(value)
+                if name not in buffers or np.asarray(value).dtype.kind == "f"
+                else value
+            )
+            for name, value in context.items()
+        }
+
+    def _check_channel(self, channel: str) -> None:
+        if channel not in self.grids:
+            raise TransformationError(
+                f"{type(self).__name__} has no channel {channel!r}; it declares "
+                f"{list(self.channels)}."
+            )
+
+    # -- the native surface (found by name on the jax and torch paths) ----
+
+    def native_grid(self, channel: str) -> Any:
+        """*channel*'s evaluation grid, micron, as the namespace's array."""
+        self._check_channel(channel)
+        return self.grids[channel]
+
+    def native_flux(self, channel: str, values: Mapping[str, Any] | None = None) -> Any:
+        """*channel*'s flux in Jy as the namespace's array: pure, and traceable on jax and torch."""
+        self._check_channel(channel)
+        return self._flux(self.grids[channel], self.portable_context(values))
+
+    # -- the contract surface ---------------------------------------------
+
+    def evaluate(self, **values: Any) -> ModelResult:
+        """One :class:`~ampere.core.Spectrum` per channel, converted to numpy at the boundary."""
+        context = self.portable_context(values)
+        emitted = {}
+        for channel in self.channels:
+            template = self.templates[channel]
+            flux = np.asarray(
+                self.ops.to_numpy(self._flux(self.grids[channel], context)), dtype=np.float64
+            )
+            emitted[channel] = template.with_values(
+                np.broadcast_to(flux, template.values.shape).copy()
+            )
+        return ModelResult(emitted)
+
+
+def _as_micron(coordinates: Any) -> np.ndarray:
+    """Coordinates as bare float64 micron, whether or not they arrive as a Quantity."""
+    if isinstance(coordinates, u.Quantity):
+        return np.asarray(coordinates.to_value(u.micron), dtype=np.float64)
+    return np.asarray(coordinates, dtype=np.float64)
