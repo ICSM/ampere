@@ -245,7 +245,10 @@ __all__ = [
 #: record there, as a run seeded with a supplied Optimum always has. Both new
 #: keys are written by ``Engine.finish``, not by :func:`provenance_attrs`; a
 #: key on every engine run rides a bump, and ``ampere_problem_hash`` moves
-#: with the constant as at every bump.
+#: with the constant as at every bump. *(W7.17: a fourth value, ``"mixed"`` --
+#: the ball on the unsaturated coordinates and prior draws on the saturated
+#: ones -- and ``ampere_start_fallback`` then names those coordinates,
+#: comma-separated; no key changed, so no bump.)*
 PROVENANCE_SCHEMA_VERSION = 11
 
 #: Every attribute this module writes starts with this, so ampere's provenance

@@ -125,10 +125,12 @@ class EmceeEngine(Engine):
             method="scipy", starts=1)`` and starts the walkers in
             ``initial_positions(walkers, around=optimum)``'s ball at its mode,
             falling back to the prior with a :class:`~ampere.inference.
-            DefaultStartWarning` when the optimiser finds no start it can score
-            or its mode sits on a prior bound. ``"prior"`` draws them from the
-            joint prior on this engine's own initialisation stream (the former
-            default, bit for bit). An :class:`~ampere.results.Optimum` (W6.7)
+            DefaultStartWarning` when the optimiser finds no start it can score;
+            a mode on a prior bound starts mixed (W7.17: prior draws on the
+            bound-pinned coordinates, the ball on the rest), silently.
+            ``"prior"`` draws them from the joint prior
+            on this engine's own initialisation stream (the former default,
+            bit for bit). An :class:`~ampere.results.Optimum` (W6.7)
             is a ball at its mode — ``initial=optimise(problem)`` is the
             eight-start route — and an array is ``(walkers, n_dim)`` start
             positions. The run records which in ``ampere_start_kind``.
