@@ -193,11 +193,19 @@ class TestTheOptIn:
         the opt-in one through the contract path, and this row is about the
         foreign part rather than about the fast path (which falls back, and is
         asserted to below).
+
+        ``initial="prior"`` since W7.12, for the same reason again: the default
+        start runs the optimiser, which scores the all-native twin through its
+        realisation and the opt-in problem through the contract path, and the
+        two modes differ at the ninth decimal on jax -- different starts, so
+        different chains. The prior draws are identical by construction.
         """
         opted = foreign_problem(native, allow_foreign_parts=True)
         twin = build_problem(native, GP_SPEC)
         runs = [
-            EmceeEngine(problem, walkers=8, use_realisation=False).run(steps=60, burn_in=20)
+            EmceeEngine(problem, walkers=8, use_realisation=False).run(
+                steps=60, burn_in=20, initial="prior"
+            )
             for problem in (opted, twin)
         ]
         for name in opted.parameters.free_names:
