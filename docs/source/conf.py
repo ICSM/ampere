@@ -75,11 +75,17 @@ exclude_patterns = ["pyphot*", "test*", "old*"]
 #
 html_theme = "alabaster"
 
-# No custom static files. This entry was `['_static']`, a directory that has
-# never existed in this repository, so every build emitted
-# "html_static_path entry '_static' does not exist" (W2.15). Restore the entry
-# together with the directory, when there is a stylesheet to put in it.
-html_static_path = []
+# `_static` holds one file, `custom.css`: the colour overrides of the
+# accessibility review (W7.7; the measurements are on the Accessibility page).
+# alabaster always links `_static/custom.css` after its own stylesheet, so the
+# file overrides the theme without a template. The entry was `[]` from W2.15,
+# when the directory did not exist and every build warned about it.
+html_static_path = ["_static"]
+
+# The page language, written into `<html lang="...">` so that screen readers
+# pick the right pronunciation (WCAG 3.1.1). "en" is Sphinx's default; it is
+# set here so that the attribute is a decision, not a default.
+language = "en"
 
 
 # -- autodoc: what is faked, and why (W2.15) ---------------------------------
