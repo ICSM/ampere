@@ -234,7 +234,19 @@ __all__ = [
 #: parameter nothing hashed changes but the schema constant itself, which is
 #: in :func:`problem_fingerprint`, so ``ampere_problem_hash`` moves at this
 #: bump as at every previous one.
-PROVENANCE_SCHEMA_VERSION = 10
+#: **11 (W7.12)**: ``ampere_start_kind`` joined every engine's run --
+#: ``"optimum"`` when emcee or zeus ran the optimiser itself for its start
+#: (their new default), ``"prior"`` for prior draws (``initial="prior"``,
+#: a fallback, or every engine whose start is the prior), ``"supplied"`` for
+#: a caller's own array or Optimum -- and ``ampere_start_fallback``, the
+#: reason in one sentence, on a run whose default start fell back to the
+#: prior. ``ampere_start_route`` and ``ampere_start`` keep their schema-9
+#: meaning exactly: a default-started run writes the optimum's route and
+#: record there, as a run seeded with a supplied Optimum always has. Both new
+#: keys are written by ``Engine.finish``, not by :func:`provenance_attrs`; a
+#: key on every engine run rides a bump, and ``ampere_problem_hash`` moves
+#: with the constant as at every bump.
+PROVENANCE_SCHEMA_VERSION = 11
 
 #: Every attribute this module writes starts with this, so ampere's provenance
 #: never collides with ArviZ's own (``created_at``, ``creation_library``, ...)

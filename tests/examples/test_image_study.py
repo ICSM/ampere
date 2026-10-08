@@ -16,6 +16,7 @@ gross effect. Anything finer needs the marked run.
 from __future__ import annotations
 
 import importlib.util
+from typing import Any
 
 import numpy as np
 import pytest
@@ -23,6 +24,7 @@ import pytest
 from ampere.core import Image, Layout
 
 from examples.image import generators, model, study
+
 
 needs_torch = pytest.mark.skipif(
     importlib.util.find_spec("torch") is None, reason="needs ampere[torch]"
@@ -206,14 +208,18 @@ class TestTheBenchmark:
 class TestCalibration:
     """The coverage claim, at a smoke budget."""
 
-    def test_the_flexible_arm_covers_at_a_smoke_budget(self) -> None:
-        calibration = study.run_calibration(
-            "flexible",
-            pixels=TINY_PIXELS,
-            count=6,
-            draws=60,
-            budget=study.EmceeBudget(walkers=8, steps=60, burn_in=20),
-        )
+    def test_the_flexible_arm_covers_at_a_smoke_budget(self, prior_start: Any) -> None:
+        # From the prior: sixty steps from the optimiser's half-width ball do
+        # not let the ensemble expand to the posterior's width, so the
+        # intervals are too narrow and six replicas under-cover (W7.12).
+        with prior_start():
+            calibration = study.run_calibration(
+                "flexible",
+                pixels=TINY_PIXELS,
+                count=6,
+                draws=60,
+                budget=study.EmceeBudget(walkers=8, steps=60, burn_in=20),
+            )
         coverage = study.coverage_at(calibration, 0.9)
         assert coverage.shape == (len(generators.TRUTH),)
         assert np.all(coverage >= 0.0)

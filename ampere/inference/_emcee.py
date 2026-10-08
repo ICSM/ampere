@@ -121,11 +121,17 @@ class EmceeEngine(Engine):
         thin
             Keep every *thin*-th retained step.
         initial
-            ``(walkers, n_dim)`` start positions, or an
-            :class:`~ampere.results.Optimum` (W6.7): the walkers then start in
-            ``initial_positions(walkers, around=optimum)``'s ball at its mode.
-            The default draws them from the joint prior on this engine's own
-            initialisation stream.
+            ``None`` (the default, W7.12) runs ``optimise(problem,
+            method="scipy", starts=1)`` and starts the walkers in
+            ``initial_positions(walkers, around=optimum)``'s ball at its mode,
+            falling back to the prior with a :class:`~ampere.inference.
+            DefaultStartWarning` when the optimiser finds no start it can score
+            or its mode sits on a prior bound. ``"prior"`` draws them from the
+            joint prior on this engine's own initialisation stream (the former
+            default, bit for bit). An :class:`~ampere.results.Optimum` (W6.7)
+            is a ball at its mode — ``initial=optimise(problem)`` is the
+            eight-start route — and an array is ``(walkers, n_dim)`` start
+            positions. The run records which in ``ampere_start_kind``.
         progress
             emcee's progress bar. Off by default: a driver that prints by
             default is unusable inside a loop or a test suite.
@@ -139,7 +145,7 @@ class EmceeEngine(Engine):
 
         _kept(int(steps), int(burn_in), int(thin), self.NAME)
         self.start()
-        positions = self._start_positions(initial, self.walkers, self._checked_initial)
+        positions = self._ensemble_start(initial, self.walkers, self._checked_initial)
 
         sampler = emcee.EnsembleSampler(
             self.walkers,

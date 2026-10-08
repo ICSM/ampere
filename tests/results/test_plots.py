@@ -607,9 +607,10 @@ class TestTrace:
             plot_trace(tree)
 
     def test_it_says_nothing_for_an_exact_runs_default(self) -> None:
+        tree = run(toy())  # thirty draws: emission's convergence verdict (W7.12) may warn
         with warnings.catch_warnings():
             warnings.simplefilter("error", ResultsWarning)
-            plot_trace(run(toy()))
+            plot_trace(tree)
 
 
 class TestTracePaging:

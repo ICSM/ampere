@@ -28,8 +28,12 @@ from examples.interferometry import study
 
 
 @pytest.fixture(scope="session")
-def calibrations() -> dict[str, Any]:
-    """The three arms' SBC calibration datasets, computed once per session."""
+def calibrations(prior_start: Any) -> dict[str, Any]:
+    """The three arms' SBC calibration datasets, computed once per session.
+
+    From the prior start (W7.12): one optimiser run per replica would double
+    the study's setup time, and its pinned coverage was measured from the prior.
+    """
     import warnings
 
     with warnings.catch_warnings():
@@ -38,7 +42,8 @@ def calibrations() -> dict[str, Any]:
         # allowed through, as tests/m2/test_visibility_calibration.py's own
         # row does.
         warnings.filterwarnings("ignore", message=r".*goodness-of-fit test.*")
-        return {arm: study.run_calibration(arm) for arm in study.ARMS}
+        with prior_start():
+            return {arm: study.run_calibration(arm) for arm in study.ARMS}
 
 
 @pytest.fixture(scope="session")

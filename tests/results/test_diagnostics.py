@@ -771,7 +771,12 @@ class TestSummary:
     def test_it_says_nothing_for_an_exact_runs_default(self) -> None:
         tree = near_truth(white_problem())
         with warnings.catch_warnings():
-            warnings.simplefilter("error", ResultsWarning)
+            # The approximation warning only: six draws fail the convergence
+            # verdict (W7.12), which TestTheVerdict in
+            # tests/inference/test_default_start.py covers.
+            warnings.filterwarnings(
+                "error", message=".*ampere_approximation", category=ResultsWarning
+            )
             summary(tree)
 
 

@@ -1629,9 +1629,11 @@ backend's trace runs through by design rather than by accident.
 ## 10b. Optimisers: point estimates and starts (*Added W6.7*)
 
 *(Added W6.7, 2026-09-29; the decision-log row "The optimisers module"
-records the rulings.)* Every engine starts from prior draws that merely score
-finite (`Engine.initial_positions`), and until W6.7 a user had no cheap way to
-ask "where should I be looking?". The answer is additive surface beside §4.5,
+records the rulings.)* Until W6.7 every engine started from prior draws that
+merely score finite (`Engine.initial_positions`), and a user had no cheap way
+to ask "where should I be looking?". *(Amended W7.12, 2026-10-07: the two
+ensemble engines' default start is now the optimiser's mode — "The default
+start" below; every other engine still starts from the prior.)* The answer is additive surface beside §4.5,
 not a change to it: nothing in §10 or §10a moved.
 
 **The surface is a function, not an engine.** An optimiser produces no
@@ -1687,6 +1689,30 @@ prior draw. Every sampling engine's `run(initial=)` accepts an `Optimum` as
 well as an array: emcee and zeus through that ball, NUTS and blackjax with
 each chain at the mode plus a jitter of a tenth of the covariance (through
 the existing `init_to_value` route), `VIEngine` at the mode exactly.
+**The default start** *(Amended W7.12, 2026-10-07; decision-log row "The
+ensembles' default start")*. `EmceeEngine.run` and `ZeusEngine.run` with
+`initial=None` — the default — run `optimise(problem, method="scipy",
+starts=1)` once (its start seeded from the engine's own `"default_start"`
+stream — reproducible from the problem's seed, and the problem's
+`"optimise.initialisation"` stream is left where it was, so a later
+`optimise(problem)` is unaffected by the run; one start and no time cap, so
+the run does not depend on the machine) and start from that ball. `initial="prior"`
+is the former default, the same prior draws on the same stream, bit for bit;
+an array or an `Optimum` is the caller's, and `initial=optimise(problem)` is
+the full eight-start route. Two problems fall back to the prior with a
+`DefaultStartWarning` naming the reason and `initial="prior"`: no start the
+optimiser can score (`optimise` raises `EngineError`), and an optimum
+`saturated_bounds` finds on a bound of the support (a ball there is
+degenerate, every walker staying on the bound), whose warning names each
+label, the value it sits at, and "widen or move the prior". A refused
+covariance is not a fallback (the ball's diagonal stands in). The
+optimiser's own `BoundSaturationWarning` is caught inside the engine, which
+gives its own; the optimiser's evaluations are not counted as the run's
+failures. NUTS, blackjax, VI and the nested samplers keep their starts. An
+ensemble engine whose problem has `ENSEMBLE_SIZE_WARNING = 16` or more free
+coordinates warns once per run (`EnsembleSizeWarning`), naming NUTS on a
+native backend.
+
 `warm_start_gp` (the reduced-rank empirical-Bayes route, its closed form
 derived in its docstring) returns hyperparameter optima in the likelihood's
 own parameter names, and `Optimum.combine` merges disjoint optima so a model
@@ -1696,7 +1722,12 @@ optimum and its GP's hyperparameters can seed one run.
 (`"prior"`, `"user"`, `"pathfinder"` or the optimum's route) on every run and
 `ampere_start` (the optimum's route, identity hash, constrained-space
 density, evaluation count, convergence) on a run seeded from an `Optimum` —
-`results.md` §9's schema 9.
+`results.md` §9's schema 9. A default-started ensemble run is such a run: it
+writes the scipy route and the optimum's record. *(Amended W7.12, schema
+11)*: `ampere_start_kind` (`"optimum"` when the engine ran the optimiser
+itself, `"prior"` for prior draws, `"supplied"` for a caller's array or
+`Optimum`) on every engine's run, and `ampere_start_fallback`, the reason,
+when the default fell back.
 
 **The refusals, by name.** `method="map"`/`"vi"` on a problem with no
 differentiable realisation (the sentence names `"scipy"`); an unknown method
@@ -2837,6 +2868,7 @@ True
 | Capability flags are class attributes on W1.5's ABCs, defaulting to the reference answers | Promoted at the freeze (ruled 2026-09-03, §19.6), replacing the interim `getattr` reads with identical semantics: every composed piece declares the three flags, silence inherits `False`/`False`/`"cpu"`, and `declared_capabilities` reads them directly |
 | `simulate` draws Gaussian observations and refuses everything else | A family declares only `log_prob`; guessing would train SBI on the wrong forward model |
 | `substream` lives in its own module | `lowering.md` §12.7 asked W1.13 to ratify or move it; **ratified in place** (ruled 2026-09-03) — pure stdlib+numpy, deliberately free-standing |
+| The ensembles start at the optimiser's mode by default *(Added W7.12)* | From the prior the memo's first fit reached R-hat 1.5 at 36 000 evaluations; the one-start scipy mode gives 1.05 at the same budget. One start and no time cap keep it cheap and machine-independent; a bound-pinned or unstartable optimum falls back to the prior, loudly, since a ball on a bound is degenerate |
 
 ## 17. Deliberate limitations of v1.7
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import warnings
 from types import ModuleType
+from typing import Any
 
 import numpy as np
 import pytest
@@ -253,7 +254,7 @@ class TestEndToEnd:
 
 
 @pytest.fixture(scope="module")
-def reduced_study(wstat_example: ModuleType) -> dict[str, object]:
+def reduced_study(wstat_example: ModuleType, prior_start: Any) -> dict[str, object]:
     """One reduced coverage study, shared by the checks below.
 
     Six simulations, short chains: enough to prove the machinery runs and that
@@ -261,7 +262,7 @@ def reduced_study(wstat_example: ModuleType) -> dict[str, object]:
     to say anything about coverage. Module-scoped because it is the only
     expensive thing in this file.
     """
-    with warnings.catch_warnings():
+    with warnings.catch_warnings(), prior_start():
         warnings.simplefilter("ignore", UserWarning)
         return wstat_example.coverage_study(count=6, draws=40, walkers=8, steps=120, burn_in=40)
 

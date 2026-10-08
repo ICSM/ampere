@@ -1999,12 +1999,21 @@ class TestSchemaNineAttributes:
     """W6.7: ``ampere_start_route`` on every run, ``ampere_start`` from an Optimum."""
 
     def test_the_schema_version_is_nine(self) -> None:
-        assert PROVENANCE_SCHEMA_VERSION >= 9  # nine introduced them; W7.0 bumped to ten
+        # nine introduced them; W7.0 bumped to ten, W7.12 to eleven
+        assert PROVENANCE_SCHEMA_VERSION >= 9
 
     def test_the_default_start_is_the_prior(self) -> None:
+        """``provenance_attrs``'s own default; the ensembles' default moved at W7.12.
+
+        Since W7.12 emcee and zeus start from the optimiser's mode unless told
+        ``initial="prior"``, and such a run writes the optimum's route and record
+        here (``tests/inference/test_optimise.py``'s TestTheStartInProvenance).
+        ``ampere_start_kind`` is ``Engine.finish``'s to write, not this function's.
+        """
         attrs = provenance_attrs(joint_problem())
         assert attrs["ampere_start_route"] == "prior"
         assert "ampere_start" not in attrs
+        assert "ampere_start_kind" not in attrs
 
     def test_an_optimum_start_is_recorded(self) -> None:
         from ampere.results import Optimum

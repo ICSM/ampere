@@ -513,25 +513,38 @@ class TestTheStartInProvenance:
         run = EmceeEngine(agreement_problem(), walkers=8).run(10, initial=conjugate_optimum)
         assert run.attrs["ampere_start_route"] == "scipy"
         assert json.loads(run.attrs["ampere_start"]) == conjugate_optimum.start_record()
-        assert run.attrs["ampere_schema_version"] == 10
+        assert run.attrs["ampere_start_kind"] == "supplied"
+        assert run.attrs["ampere_schema_version"] == 11
 
     def test_a_prior_started_run_says_prior(self) -> None:
-        run = EmceeEngine(agreement_problem(), walkers=8).run(10)
+        run = EmceeEngine(agreement_problem(), walkers=8).run(10, initial="prior")
         assert run.attrs["ampere_start_route"] == "prior"
+        assert run.attrs["ampere_start_kind"] == "prior"
         assert "ampere_start" not in run.attrs
+
+    def test_a_default_run_records_the_optimum_it_ran(self) -> None:
+        """W7.12: the default start is the one-start scipy mode, recorded as W6.7 records one."""
+        import json
+
+        run = EmceeEngine(agreement_problem(), walkers=8).run(10)
+        assert run.attrs["ampere_start_route"] == "scipy"
+        assert run.attrs["ampere_start_kind"] == "optimum"
+        assert json.loads(run.attrs["ampere_start"])["route"] == "scipy"
+        assert "ampere_start_fallback" not in run.attrs
 
     def test_a_callers_array_says_user(self) -> None:
         engine = EmceeEngine(agreement_problem(), walkers=8)
         run = engine.run(10, initial=np.full((8, 1), 2.0) + 0.01 * np.arange(8)[:, None])
         assert run.attrs["ampere_start_route"] == "user"
+        assert run.attrs["ampere_start_kind"] == "supplied"
 
     def test_the_optimum_carries_the_schema_too(self, conjugate_optimum: Optimum) -> None:
         from ampere.results import PROVENANCE_SCHEMA_VERSION
 
-        assert PROVENANCE_SCHEMA_VERSION == 10
-        assert conjugate_optimum.provenance["ampere_schema_version"] == 10
+        assert PROVENANCE_SCHEMA_VERSION == 11
+        assert conjugate_optimum.provenance["ampere_schema_version"] == 11
         tree = conjugate_optimum.to_datatree()
-        assert tree.attrs["ampere_schema_version"] == 10
+        assert tree.attrs["ampere_schema_version"] == 11
         assert "posterior" not in tree.children
 
 
@@ -926,7 +939,7 @@ def test_emcee_from_the_optimum_burns_in_faster(sed_scipy: Optimum) -> None:
     from examples.sed_composition.sed_composition import build_problem
 
     steps = {}
-    for label, initial in (("prior", None), ("optimum", sed_scipy)):
+    for label, initial in (("prior", "prior"), ("optimum", sed_scipy)):
         engine = EmceeEngine(build_problem("reference"), walkers=BURN_WALKERS)
         engine.run(BURN_STEPS, initial=initial)
         steps[label] = burn_in_step(np.asarray(engine.sampler.get_log_prob()))

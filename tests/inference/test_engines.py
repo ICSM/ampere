@@ -263,11 +263,18 @@ AGREEMENT: Mapping[str, Callable[[FittingProblem], Any]] = {
 }
 
 #: Reproducibility budget: the smallest run that still exercises every stream a
-#: driver derives from the problem's seed.
+#: driver derives from the problem's seed. The ensembles start from the prior
+#: (``initial="prior"``, W7.12): these rows are about the prior-draw and sampler
+#: streams; the default start's own reproducibility is
+#: ``tests/inference/test_default_start.py``'s.
 TINY: Mapping[str, Callable[[FittingProblem], Any]] = {
-    "emcee": lambda problem: EmceeEngine(problem, walkers=8).run(steps=20, burn_in=5),
+    "emcee": lambda problem: EmceeEngine(problem, walkers=8).run(
+        steps=20, burn_in=5, initial="prior"
+    ),
     "dynesty": lambda problem: DynestyEngine(problem, live_points=30).run(maxcall=600),
-    "zeus": lambda problem: ZeusEngine(problem, walkers=8).run(steps=10, burn_in=2),
+    "zeus": lambda problem: ZeusEngine(problem, walkers=8).run(
+        steps=10, burn_in=2, initial="prior"
+    ),
 }
 
 
@@ -797,7 +804,9 @@ class TestFailureSignalling:
         engine = EmceeEngine(flaky_problem(), walkers=8)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            run = engine.run(steps=150, burn_in=50)
+            # From the prior (W7.12): the optimiser's ball sits at slope 2,
+            # where the refused half-line is never proposed.
+            run = engine.run(steps=150, burn_in=50, initial="prior")
         return run, [w for w in caught if issubclass(w.category, SamplingFailureWarning)]
 
     def test_the_run_completes_rather_than_raising(
