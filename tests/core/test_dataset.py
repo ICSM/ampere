@@ -2885,3 +2885,34 @@ class TestPhotometricAlignmentByName:
         aligned = align_by_filter(predicted, observed)
         assert list(aligned.filters) == APPENDIX_A_FILTERS[:3]
         assert align_by_filter(predicted, aligned) is aligned
+
+
+class TestPredict:
+    """W7.15: ``FittingProblem.predict`` — the model curve at a point in one call."""
+
+    VALUES = {"model.index": -1.5, "model.norm": 2.0, "calibration": 1.1}
+
+    def test_the_prediction_per_dataset_is_the_instrument_chain_at_the_point(self) -> None:
+        joint = TestJointTwoDatasetProblem()
+        problem = joint.build()
+        predicted = problem.predict(self.VALUES)
+        assert set(predicted) == {"blue", "red"}
+        for label, grid in (("blue", joint.BLUE), ("red", joint.RED)):
+            expected = 1.1 * 2.0 * grid**-1.5
+            np.testing.assert_allclose(predicted[label].values, expected, rtol=1e-12)
+            assert predicted[label].unit == u.Jy
+            # The same route simulate(observe=False) takes, by construction.
+            simulated = problem.simulate(self.VALUES).predicted[label]
+            np.testing.assert_array_equal(predicted[label].values, simulated.values)
+            # And Dataset.predict on the routed values, through the public surface.
+            dataset = problem.datasets[label]
+            routed = {"instrument.calibrate.scale": 1.1}
+            result = problem.models["model"].evaluate(index=-1.5, norm=2.0)
+            np.testing.assert_allclose(
+                dataset.predict(result, routed).values, predicted[label].values, rtol=1e-12
+            )
+
+    def test_a_point_the_prior_rules_out_is_refused_by_name(self) -> None:
+        problem = TestJointTwoDatasetProblem().build()
+        with pytest.raises(DatasetError, match=r"model\.norm=50\.0.*zero prior"):
+            problem.predict({**self.VALUES, "model.norm": 50.0})

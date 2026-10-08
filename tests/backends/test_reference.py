@@ -162,9 +162,9 @@ class TestNativeModels:
 
     @pytest.mark.parametrize("build", [BlackBody, ModifiedBlackBody])
     def test_scale_and_solid_angle_are_exclusive(self, build: type) -> None:
-        with pytest.raises(ValueError, match="scale=.*solid_angle=.*not both"):
+        with pytest.raises(ValueError, match=r"scale=.*solid_angle=.*not both"):
             build(GRID, scale=1.0, solid_angle=1e-15)
-        with pytest.raises(ValueError, match="solid_angle=None"):
+        with pytest.raises(ValueError, match=r"solid_angle=None"):
             build(GRID, solid_angle=None)
         assert build(GRID).parameters["scale"].value == pytest.approx(1.0)
         assert build(GRID).parameters["scale"].unit == u.Jy

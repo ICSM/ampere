@@ -151,12 +151,14 @@ from .likelihood import (
 )
 from .parameter import (
     SEPARATOR,
+    HierarchicalPrior,
     Parameter,
     ParameterMapping,
     ParameterSet,
     Population,
     Tie,
     Value,
+    log_density,
 )
 from .results_schema import FunctionSamples, ModelResult, PhotometricPoints
 from .rng import SEED_BYTES
@@ -2804,6 +2806,59 @@ class FittingProblem:
             contributions=contributions,
             failure=failure,
         )
+
+    def predict(
+        self, values: Mapping[str, Value] | ArrayLike | None = None
+    ) -> Mapping[str, FunctionSamples]:
+        """The predicted container per dataset label at *values*: the model curve in one call.
+
+        **W7.15.** The model pushed through each dataset's instrument chain,
+        noise-free — what a likelihood compares with the data, and what a user
+        wanting the median model on a plot would otherwise recompute by hand.
+        The same route :meth:`simulate` takes with ``observe=False``, so a
+        prediction here is exactly a :class:`Simulation`'s ``predicted``.
+        :class:`Evaluation` is deliberately not widened to carry it: that is
+        the hot loop's record, kept per draw.
+
+        Parameters
+        ----------
+        values
+            Merged names to values, or a free vector; ``None`` is the reference
+            θ, as in :meth:`evaluate`.
+
+        Raises
+        ------
+        DatasetError
+            If the prior rules *values* out (naming the parameters outside
+            their prior's support), or the model or an instrument chain fails
+            there (with the recorded reason).
+        """
+        resolved = self._resolve(values)
+        merged = self._mapping.merged
+        if not math.isfinite(merged.lnprior(resolved)):
+            outside = []
+            for name in merged.free_names:
+                prior = merged[name].prior
+                if isinstance(prior, HierarchicalPrior):
+                    prior = prior.bind(resolved)
+                if not bool(np.all(np.isfinite(log_density(prior, resolved[name])))):
+                    outside.append(f"{name}={resolved[name]!r}")
+            named = ", ".join(outside) if outside else "the joint prior"
+            raise DatasetError(
+                f"predict() was asked for a point the prior rules out ({named}: zero prior "
+                f"mass). A prediction there is a model nobody could have fitted; move the point "
+                f"inside the priors' support."
+            )
+        # observe=False draws nothing, so the generator is never consumed and no
+        # named sub-stream of the problem is advanced.
+        simulation = self._run_simulation(resolved, np.random.default_rng(0), observe=False)
+        if simulation.failure is not None:
+            failure = simulation.failure
+            raise DatasetError(
+                f"predict() failed at this point: {failure.reason.value}"
+                f"{f' in {failure.where}' if failure.where else ''} — {failure.message}"
+            )
+        return types.MappingProxyType(dict(simulation.predicted or {}))
 
     def evaluate_many(
         self,

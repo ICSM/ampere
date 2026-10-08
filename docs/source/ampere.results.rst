@@ -204,10 +204,18 @@ recorded and not applied, is to vary the line style or marker with the colour
 (``cycler`` of colour and linestyle), or to use a colour-vision-safe cycle
 such as Okabe and Ito's.
 
+**W7.15**: :func:`~ampere.results.add_posterior_predictive`,
+:func:`~ampere.results.add_residuals` and :func:`~ampere.results.gp_localisation`
+re-evaluate at most :data:`~ampere.results.derived.MAX_DERIVED_DRAWS` draws by
+default, evenly spaced, with the retained indices as the group's ``draw``
+coordinate; ``thin=1`` restores every draw. :func:`~ampere.results.add_pointwise_log_likelihood` keeps every draw:
+its consumer, ``arviz.loo``, treats the draws as the sample.
+
 .. autodata:: ampere.results.diagnostics.WHITENESS_STREAM
 .. autodata:: ampere.results.diagnostics.GP_LOCALISATION_PROVENANCE
 .. autodata:: ampere.results.plots.GP_LOCALISATION_CAVEAT
 .. autodata:: ampere.results.plots.MAX_CORNER_VARIABLES
+.. autodata:: ampere.results.derived.MAX_DERIVED_DRAWS
 .. autodata:: ampere.results.plots.MAX_RANK_PANELS
 .. autodata:: ampere.results.plots.MAX_TRACE_VARIABLES
 .. autodata:: ampere.results.derived.COMPONENTS

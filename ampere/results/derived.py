@@ -107,6 +107,7 @@ __all__ = [
     "FACTORISED_DECOMPOSITION",
     "GP_LOCALISATION_GROUP",
     "JOINT_DECOMPOSITION",
+    "MAX_DERIVED_DRAWS",
     "POINTWISE_LOG_LIKELIHOOD_GROUP",
     "POSTERIOR_PREDICTIVE_GROUP",
     "RESIDUALS_GROUP",
@@ -122,6 +123,16 @@ __all__ = [
 #: Replicate observations ``y_rep ~ p(y | θ_k)``, one variable per dataset,
 #: dims ``(chain, draw, <dataset dims>)``. Not written by default.
 POSTERIOR_PREDICTIVE_GROUP = "posterior_predictive"
+
+#: The default ceiling on the draws a per-draw derived group re-evaluates
+#: (**W7.15**): :func:`add_posterior_predictive`, :func:`add_residuals` and
+#: :func:`gp_localisation` keep at most this many, evenly spaced along the
+#: ``draw`` dimension, when ``thin`` is left at ``None``. The replicate draw
+#: over every stored draw cost 8 s on nine points and 39 s on 360, and the
+#: conditioning 130 s on 360 (``user_journeys_memo.md`` Appendix A and B.2);
+#: a few hundred draws already resolve a band or a mean. An explicit integer
+#: ``thin`` means every ``thin``-th draw, ``thin=1`` every draw.
+MAX_DERIVED_DRAWS = 200
 
 #: Signed standardised residuals, one variable per dataset, dims
 #: ``(chain, draw, <dataset dims>)``. Not written by default.
@@ -267,7 +278,7 @@ def add_posterior_predictive(
     problem: FittingProblem,
     *,
     datasets: Sequence[str] | None = None,
-    thin: int = 1,
+    thin: int | None = None,
     seed_stream: str = "posterior_predictive",
     component: str | None = None,
 ) -> Any:
@@ -289,7 +300,11 @@ def add_posterior_predictive(
         Which datasets to replicate; all of them by default.
     thin
         Take every ``thin``-th draw. The reason this parameter exists is the
-        memory cost that keeps the group out of the default emission.
+        memory cost that keeps the group out of the default emission, and the
+        replicate draw's time.
+        ``None`` (the default) keeps at most :data:`MAX_DERIVED_DRAWS` draws,
+        evenly spaced (**W7.15**); an integer takes every ``thin``-th draw,
+        ``thin=1`` every draw.
     seed_stream
         The named RNG sub-stream (``lowering.md`` §9.2) the draws come from.
         Separate from ``"simulate"`` on purpose: adding a predictive check must
@@ -401,7 +416,7 @@ def add_residuals(
     problem: FittingProblem,
     *,
     datasets: Sequence[str] | None = None,
-    thin: int = 1,
+    thin: int | None = None,
     standardised: bool = True,
     component: str | None = None,
 ) -> Any:
@@ -443,6 +458,9 @@ def add_residuals(
         ``N_draws x N_obs`` memory cost that keeps the group out of the default
         emission; the retained draw indices become the group's own ``draw``
         coordinate, so a thinned group still says which draws it came from.
+        ``None`` (the default) keeps at most :data:`MAX_DERIVED_DRAWS` draws,
+        evenly spaced (**W7.15**); an integer takes every ``thin``-th draw,
+        ``thin=1`` every draw.
     standardised
         Divide by ``sigma``. Recorded on the group, because a residual panel
         and a whiteness statistic want different answers and neither should
@@ -603,7 +621,7 @@ def gp_localisation(
     problem: FittingProblem,
     *,
     datasets: Sequence[str] | None = None,
-    thin: int = 1,
+    thin: int | None = None,
     at: Any = None,
     component: str | None = None,
 ) -> Any:
@@ -638,6 +656,9 @@ def gp_localisation(
     thin
         Take every ``thin``-th draw; the retained indices become the group's
         ``draw`` coordinate.
+        ``None`` (the default) keeps at most :data:`MAX_DERIVED_DRAWS` draws,
+        evenly spaced (**W7.15**); an integer takes every ``thin``-th draw,
+        ``thin=1`` every draw.
     at
         A 1-D array of coordinates to evaluate on instead of the data's own
         axis. Handed to the solver untouched, so one place decides what a bare
@@ -1132,7 +1153,9 @@ def _gp_requested(problem: FittingProblem, datasets: Sequence[str] | None) -> tu
     return _requested(problem, datasets)
 
 
-def _stored_thetas(tree: Any, problem: FittingProblem, thin: int) -> tuple[np.ndarray, np.ndarray]:
+def _stored_thetas(
+    tree: Any, problem: FittingProblem, thin: int | None
+) -> tuple[np.ndarray, np.ndarray]:
     """``(thetas, draw_indices)`` — the posterior group packed back to free vectors.
 
     The posterior is stored by merged parameter name, which is the
@@ -1140,9 +1163,11 @@ def _stored_thetas(tree: Any, problem: FittingProblem, thin: int) -> tuple[np.nd
     not: :meth:`~ampere.core.parameter.ParameterSet.pack` puts it back into the
     flat order ``simulate`` takes. An array-valued parameter is one variable
     with a named dimension (``results.md`` §4), so it packs straight back
-    without ever materialising ``free_labels()``.
+    without ever materialising ``free_labels()``. ``thin=None`` keeps at most
+    :data:`MAX_DERIVED_DRAWS` draws, evenly spaced and always including the
+    first and the last.
     """
-    if thin < 1:
+    if thin is not None and thin < 1:
         raise ResultsError(f"thin must be at least 1, got {thin}.")
     posterior = getattr(tree, "children", {})
     if POSTERIOR_GROUP not in posterior:
@@ -1153,7 +1178,11 @@ def _stored_thetas(tree: Any, problem: FittingProblem, thin: int) -> tuple[np.nd
     names = [str(name) for name in group.data_vars]
     chains = int(group.sizes[CHAIN_DIM])
     count = int(group.sizes[DRAW_DIM])
-    kept = np.arange(0, count, thin)
+    if thin is None:
+        kept = np.unique(np.linspace(0, count - 1, min(count, MAX_DERIVED_DRAWS)).round())
+        kept = kept.astype(int)
+    else:
+        kept = np.arange(0, count, thin)
     arrays = {name: np.asarray(group[name].values) for name in names}
     thetas = np.empty((chains, kept.size, problem.free_size), dtype=float)
     for chain in range(chains):
