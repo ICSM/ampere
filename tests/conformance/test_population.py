@@ -621,7 +621,12 @@ class TestAPopulationOverADatasetPath:
             if not np.isfinite(expected):
                 assert not np.isfinite(got)
                 continue
-            assert got == pytest.approx(expected, abs=tolerances.cross_backend)
+            # At the box-edge points (y = ±6) a GP amplitude far from its prior puts
+            # the density near -1e7, where an absolute 1e-9 is below one ulp: the
+            # agreement is held relatively there, and absolutely everywhere else.
+            assert got == pytest.approx(
+                expected, rel=tolerances.cross_backend, abs=tolerances.cross_backend
+            )
 
     def test_refusals_by_name(self, backend: ConformanceBackend) -> None:
         # A path that does not resolve names the components at that level.
