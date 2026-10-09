@@ -147,6 +147,18 @@ Unreleased
   caveat no longer overdraws the axis label, and a corner plot no longer
   logs "too few points to create valid contours".
 
+* **A population over each dataset's own nuisance parameters.** A
+  :class:`~ampere.core.Population`'s ``over`` entries may now be a path
+  inside a dataset — ``"d0.likelihood"`` for the flexible likelihood's GP
+  amplitude, ``"d0.instrument.calibrate"`` for one calibration step — so a
+  per-dataset nuisance is drawn from one shared prior with a fitted spread,
+  and ``DatasetCollection.plate(..., within="likelihood")`` writes those
+  entries from the dataset labels. An emitted run's plate dimension is
+  labelled by the dataset labels, and the declaration is recorded in the
+  run's provenance as ``ampere_populations`` (provenance schema 12). A
+  dataset named in ``over`` without a path is still refused, now with this
+  form as the remedy. See :doc:`population`.
+
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
 

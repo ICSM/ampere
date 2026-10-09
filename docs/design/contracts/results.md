@@ -1050,6 +1050,26 @@ and `ampere_start_fallback` for its remedy; it and the `ResultsWarning`
 `ampere_approximation` exactly as `summary`'s approximation warning is,
 and a nested sampler's resample is not judged either.
 
+**The population declarations, and the constant is now 12** *(Amended W7.1,
+2026-10-09; decision-log row "Per-dataset nuisance populations")*.
+**`ampere_populations`** is canonical JSON of the problem's `Population`
+declarations in merge order, one entry each — `{"name", "label", "layout",
+"over", "members", "hyperpriors"}`, the `over` entries exactly as declared
+(qualified paths included) and the members and hyperpriors by bare name only,
+since their priors are already in the merged spec under the population's own
+component. It is `"[]"` when there are none, so the attribute exists on every
+run from schema 12 on, written by `provenance_attrs` beside `ampere_derived`.
+The record is new because the declaration was recorded nowhere (W6.11's
+finding): the merged spec moved with a population, but the population's own
+component is in neither a dataset's nor a model's per-component hash, and
+since W7.1 a population may be declared over a dataset's own path
+(`"d0.likelihood"`), after which that dataset's own spec no longer declares
+the leaf the population replaced. Recorded, not hashed: `problem_fingerprint`
+already hashes the merged spec and `sites`, both of which move when `over`
+does (the conformance suite pins that reordering `over` moves
+`ampere_problem_hash`), and the schema constant itself is in it, so
+`ampere_problem_hash` moved at this bump as at every previous one.
+
 ### The hashing recipe
 
 Four steps, and each is a decision.
@@ -1474,6 +1494,7 @@ training set and is what the composed problem is for.
 | A point estimate is an `Optimum` with an `optimum` group, never a one-draw `posterior` *(Added W6.7)* | A mode stored as a posterior would be diagnosed, plotted and reweighted as a sample; its own group keeps it out of every posterior reader while the one results format and the netCDF route still carry it, and `ampere_start` (schema 9) ties a seeded run back to it |
 | An `Optimum` records the coordinates its minimiser moved in *(Added W7.6)* | The scipy route now moves bounded coordinates in their constrained value (a sigmoid-saturated line search in `u` ended W6.7's NGC6302 fit at a box corner); the same point can be reached either way, so the choice is provenance, not identity — a field beside the vector, absent-means-`"unconstrained"` so every beta-stored optimum reads unchanged, and no schema bump because nothing a run records moves |
 | A mixed start is a fourth `ampere_start_kind`, and the verdict's R-hat default is 1.1 *(Amended W7.17)* | A new value of an existing key adds no key, so no bump (the rule of the schema-11 history comment); `ampere_start_fallback` names the prior-started labels. 1.05 flagged a well-run ensemble (Appendix A reaches 1.053), so the default is the ensemble convention; the remedy names the labels |
+| The population declarations are recorded as `ampere_populations`, names only *(Added W7.1)* | The merged spec already carries the priors; what was recorded nowhere was the declaration itself — which components, in which order, by which path — and after a population over a dataset's path the dataset's own spec no longer tells the truth about the leaf it replaced. On every run (`"[]"` when none), so it rides a bump (12) |
 | A run says which start it had, and a failing chain is told so *(Added W7.12)* | `ampere_start_route`/`ampere_start` already meant something (schema 9), so the ensembles' new default start rides a new key, `ampere_start_kind`, rather than redefining them; the verdict reuses `summary`'s `ampere_approximation` guard so a VI or SBI run is never warned about R-hat |
 
 ## 13. Deliberate limitations of v1.8

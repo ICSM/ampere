@@ -685,6 +685,23 @@ is the population's internal member (§9, "`Population`"). No existing fixture
 relied on either allowance in its public rows; one unit test of the flat cap's
 warning merged over empty components and was changed to declare the member.
 
+*Amended W7.1* (2026-10-09) — **`PlateBinding.local_name` and
+`Binding.local_name` may be a qualified path relative to the component**
+(`"likelihood.amplitude"`, `"instrument.calibrate.scale"`), so an element can
+reach a leaf *inside* a component that was merged as a `ParameterMapping` — a
+dataset. Nothing in routing changes: the outer `distribute` hands the dataset
+its value under the key `likelihood.amplitude`, which is exactly one of the
+dataset's own merged names, and the dataset's retained mapping takes the
+second hop it already takes for every other value (`Dataset.route`). The
+bindings view needs no change either: an element binding does not descend, and
+with a path the element's `local_name` *is* the leaf path, so
+`sites_of("gp.amplitude")` already names `("d0", "likelihood.amplitude", 0)`.
+The shadow check compares the full path, so an element binding cannot deliver
+a leaf the composite still declares. `PlateBinding.component` stays a bare
+top-level label. A population produces these bindings from its `over` entries
+(§9); the composite's own merged set keeps declaring the leaf — only the
+outer copy is stripped — which is what lets the second hop accept the value.
+
 ## 9. Hierarchical structure: `HierarchicalPrior` and `Plate`
 
 The plan's design horizon (d) asks that population models stay expressible and
@@ -998,12 +1015,47 @@ has no draw); a site already tied or `shared_as` (sharing collapses N sites
 into one value, a population keeps them N — pick one); a routed member some
 `over` components declare and others do not, and an undeclared member no
 derived member uses (*Added W7.0*, above); a derived or internal member in the
-flat layout; and a component merged
-as a `ParameterMapping`, because a composite's merged names are qualified
-(`likelihood.scale`) while a population addresses its members by bare local
-name, so the draw would never reach a leaf. For a plate of per-object
-*datasets*, declare the population over the models those datasets name —
-which is what `DatasetCollection.plate` does.
+flat layout; and (*Amended W7.1*) a component merged as a `ParameterMapping`
+**without a path**, because a composite's merged names are qualified
+(`likelihood.amplitude`) while a bare member would be routed under its bare
+name and never reach a leaf — the refusal names the remedy, `over=["d0.likelihood",
+...]` or `DatasetCollection.plate(..., within="likelihood")`, and the
+components inside the composite.
+
+#### `over` entries: a component, or a path inside one (*Added W7.1*)
+
+An `over` entry is one identifier — a top-level component, as since W5.12 — or
+identifiers joined by `.`: the component, then the path **inside** it to the
+plain set that declares the member (`"d0.likelihood"`, one level;
+`"d0.instrument.calibrate"`, two — the dataset's mapping, then the
+instrument's). This is how a per-dataset nuisance is drawn from one shared
+prior: each dataset's GP amplitude under a fitted spread, or each dataset's
+calibration scale. The member's **leaf** is `rest.member` in the component's
+outer declaration (`d0.likelihood.amplitude`); every check above runs against
+it, the plate layout strips it from that outer declaration and routes element
+*i* to it under the qualified local name (§8, *Amended W7.1*), and the flat
+layout re-priors it in place, its hierarchical references qualified onto the
+population's hyperpriors exactly as for a bare member. Each entry resolves on
+its own, so a population whose entries sit at different depths (`"d0.likelihood"`
+and `"m1"`) is allowed provided the leaves agree in shape and unit.
+
+The path is **validated, not followed**: it is resolved at merge through the
+retained inner mappings one segment per level, and refused by name when a
+segment does not resolve (naming the components available at that level),
+when it continues past a plain set, when it ends at a composite (name the
+plain set inside it), or when it is given for a component merged as a plain
+set ("address it without a path"). **A routed member's leaf must exist in
+every `over` component** — W7.0's rule 2, and for a composite it is the only
+possible rule, because a composite's inner routing has no row for a leaf it
+never declared; an internal member (an input of a derived member) is exempt
+and routed nowhere, as for a bare entry. **A leaf an inner `shared_as` (or
+inner `Tie`) collapsed** is absent from the outer declaration under its own
+name and present under the tie label; it is refused naming that label, since
+sharing and population are alternatives for one quantity. What this does not
+do: a member's name stays an identifier (the path lives on the entry); one path
+per entry, no per-element paths; and still one plate dimension per parameter
+(§12.2). `DatasetCollection.plate(within=)` writes the entries from the dataset
+labels (`inference.md` §9).
 
 ### `Derived` — a parameter that is a function of others (*Added W7.0*)
 
