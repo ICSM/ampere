@@ -321,6 +321,16 @@ internal ``z`` and a derived member,
 ``Parameter("amplitude", Derived("exp(mu + sigma * z)"))``, exactly as for a
 model parameter.
 
+One backend caveat. The torch realisation lowers a *hierarchical* prior only
+for the location-scale families — ``norm``, ``halfnorm``, ``uniform``,
+``halfcauchy``, ``expon`` and ``gamma``, whose arguments pass as tensors so
+the hyperparameters keep a gradient — and refuses a hierarchical ``lognorm``
+member by name at :func:`~ampere.core.realise`; jax lowers the example as
+written. On torch, declare the member as a half-normal
+(``HierarchicalPrior("halfnorm", {"scale": "spread"})``, positive too), or use
+the non-centred form above, whose sampled ``z`` is a plain normal. The
+numpy path (the ensemble engines) evaluates every family.
+
 The rules are the bare form's, applied to the leaf: it must exist in every
 dataset named, must not be fixed, tied or ``shared_as``, and must agree in
 shape and unit. A dataset named *without* a path is refused, the message
