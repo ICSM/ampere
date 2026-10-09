@@ -97,7 +97,7 @@ What this module does **not** do, deliberately:
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, ClassVar
 
 import astropy.units as u
@@ -389,7 +389,7 @@ class _AveragingStep(_Step):
         return VisibilitySet(
             coordinates["u"],
             coordinates["v"],
-            coordinates["spectral_axis"] * SPECTRAL_UNIT,
+            coordinates["spectral_axis"] * (samples.spectral_axis.unit or SPECTRAL_UNIT),
             averaged,
             unit=samples.unit,
             mask=mask,
@@ -702,6 +702,11 @@ class FourierSample(_Step):
             waves,
         )
         self._template: VisibilitySet | None = None
+        # The unit the emitted container's spectral axis carries (W7.4): the
+        # step computes in micron throughout, and converts once when the
+        # template is built. Explicit construction emits micron; from_observed
+        # sets the observed container's own unit.
+        self._emit_unit: u.UnitBase = SPECTRAL_UNIT
 
     # -- construction from the data -----------------------------------------
 
@@ -717,7 +722,11 @@ class FourierSample(_Step):
         """Take the coverage from the observed container. **The supported route.**
 
         For a :class:`~ampere.core.VisibilitySet` the coverage is the
-        container's own three axes, unchanged.
+        container's own three axes, unchanged. The emitted container carries
+        the observed container's **own spectral unit** (W7.4): the step
+        computes in micron, but a prediction in micron against data in
+        nanometres would fail the alignment check at composition, so the axis
+        is converted back once, when the output template is built.
 
         For a :class:`~ampere.core.ClosurePhases` it is the **three baselines
         of every triangle**, in the canonical order that kind fixes: ``ij``,
@@ -732,7 +741,7 @@ class FourierSample(_Step):
             v_pts = np.stack([container.v1.values, container.v2.values, v3], axis=1).reshape(-1)
             waves = np.repeat(container.spectral_axis.values, 3)
             wavelength: Any = waves * (container.spectral_axis.unit or SPECTRAL_UNIT)
-            return cls(
+            step = cls(
                 u_pts,
                 v_pts,
                 wavelength,
@@ -740,9 +749,11 @@ class FourierSample(_Step):
                 oversampling=oversampling,
                 label=label,
             )
+            step._emit_unit = container.spectral_axis.unit or SPECTRAL_UNIT
+            return step
         if isinstance(container, VisibilitySet):
             axis = container.spectral_axis
-            return cls(
+            step = cls(
                 container.u.values,
                 container.v.values,
                 axis.values * (axis.unit or SPECTRAL_UNIT),
@@ -750,6 +761,8 @@ class FourierSample(_Step):
                 oversampling=oversampling,
                 label=label,
             )
+            step._emit_unit = axis.unit or SPECTRAL_UNIT
+            return step
         raise TransformationError(
             f"FourierSample.from_observed takes the coverage from a VisibilitySet or a "
             f"ClosurePhases, got a {type(container).__name__}. Those are the two kinds that "
@@ -786,6 +799,10 @@ class FourierSample(_Step):
                 continue
             expansion = expander(u_pts, v_pts, waves)
             u_pts, v_pts, waves = expansion.u, expansion.v, expansion.wavelength
+            # Mark the expander honoured: a step whose arithmetic needs its
+            # expansion (SquaredAmplitude's model form) refuses by name when
+            # nothing has expanded for it.
+            setattr(step, "_expanded_by", self)
         self._expanded = (u_pts.reshape(-1), v_pts.reshape(-1), waves.reshape(-1))
         self._template = None
 
@@ -931,7 +948,7 @@ class FourierSample(_Step):
         self._template = VisibilitySet(
             u_pts,
             v_pts,
-            waves * SPECTRAL_UNIT,
+            (waves * SPECTRAL_UNIT).to(self._emit_unit),
             np.zeros(u_pts.size, dtype=np.complex128),
             unit=unit,
         )
@@ -1117,6 +1134,22 @@ class SquaredAmplitude(_Step):
     it, the output is ``|V|**2 / normalisation**2``, unitless, in the same
     representation a reader's ``VIS2DATA`` arrives in.
 
+    **The model form (W7.4).** ``normalisation="model"`` divides by the
+    model's **own** zero-spacing flux instead: ``|V(u, v) / V(0, 0)|**2``,
+    with ``V(0, 0)`` evaluated through the very :class:`FourierSample` the
+    chain already holds. It is the right form when the total flux is a free
+    parameter (the buffer form needs it fixed): the normalised visibility
+    constrains the geometry, and the flux drops out of the ratio instead of
+    being pinned at a guessed value. The step is an *expander* (the smearing
+    steps' mechanism): it asks the Fourier step to evaluate each observed
+    sample **and** its zero-spacing twin ``(0, 0, lambda)`` -- index ``0``
+    the sample, index ``1`` the twin -- so the DFT costs **twice** the
+    samples. The default (``None``) and the buffer form are unchanged. The
+    form needs a :class:`FourierSample` earlier in the chain; on the analytic
+    ``*Visibilities`` route nothing can expand, and the step refuses by name
+    (pass the flux there). The output is unitless in this mode; ``_scale``
+    and ``_output_unit`` are not reached on this path.
+
     The mask comes through :meth:`~ampere.core.FunctionSamples.with_values`,
     which inherits it: the mapping is one-to-one. An uncertainty on the input
     is dropped rather than relabelled — a ``sigma`` in Jy is not a ``sigma``
@@ -1127,8 +1160,8 @@ class SquaredAmplitude(_Step):
     normalisation
         The zero-spacing flux to divide by (Jy, or a flux
         :class:`~astropy.units.Quantity`), finite and positive; ``None`` (the
-        default) leaves ``|V|**2`` in the input unit squared. A buffer, not a
-        parameter.
+        default) leaves ``|V|**2`` in the input unit squared; ``"model"``
+        divides by the model's own ``V(0, 0)``. A buffer, not a parameter.
     label
         Component label for this step within a chain.
     """
@@ -1138,7 +1171,16 @@ class SquaredAmplitude(_Step):
     def __init__(self, *, normalisation: Any = None, label: str | None = None) -> None:
         super().__init__(label=label)
         self._normalisation: float | None = None
-        if normalisation is not None:
+        self._mode: str | None = None
+        self._trailing = 1
+        if isinstance(normalisation, str):
+            if normalisation != "model":
+                raise TransformationError(
+                    f"SquaredAmplitude's normalisation is a flux, None, or the string 'model', "
+                    f"got {normalisation!r}."
+                )
+            self._mode = "model"
+        elif normalisation is not None:
             try:
                 flux = float(_to_unit(normalisation, FLUX_UNIT))
             except (u.UnitConversionError, TypeError, ValueError) as exc:
@@ -1153,6 +1195,85 @@ class SquaredAmplitude(_Step):
                 )
             self.register_buffer("normalisation", flux, unit=FLUX_UNIT)
             self._normalisation = flux
+
+    # -- the model form: the expansion it asks of the Fourier step ------------
+
+    @property
+    def nodes(self) -> int:
+        """Samples this step evaluates per observed one: two in the model form, else one."""
+        return 2 if self._mode == "model" else 1
+
+    @property
+    def expand_uv(self) -> Callable[..., _Expansion]:
+        """The expansion hook, present **only** in the model form.
+
+        :meth:`FourierSample.configure_from` looks for the attribute by name; a
+        property that raises ``AttributeError`` in the other forms keeps the
+        buffer form and ``None`` invisible to it.
+        """
+        if self._mode != "model":
+            raise AttributeError("expand_uv")
+        return self._expand_zero_spacing
+
+    @staticmethod
+    def _expand_zero_spacing(
+        u_pts: np.ndarray, v_pts: np.ndarray, wavelength: np.ndarray
+    ) -> _Expansion:
+        """Each sample at index 0, its zero-spacing twin ``(0, 0, lambda)`` at index 1."""
+        zero = np.zeros_like(u_pts)
+        return _Expansion(
+            np.stack([u_pts, zero], axis=-1),
+            np.stack([v_pts, zero], axis=-1),
+            np.stack([wavelength, wavelength], axis=-1),
+            np.array([1.0, 0.0]),
+        )
+
+    def configure_from(self, downstream: Sequence[Transformation]) -> None:
+        """Count the sub-samples the steps after this one added (as the smearing steps do)."""
+        trailing = 1
+        for step in downstream:
+            if getattr(step, "expand_uv", None) is not None:
+                trailing *= int(getattr(step, "nodes", 1))
+        self._trailing = trailing
+
+    def _require_expansion(self) -> None:
+        if getattr(self, "_expanded_by", None) is None:
+            raise TransformationError(
+                "SquaredAmplitude(normalisation='model') needs a FourierSample earlier in the "
+                "chain; on the analytic route pass the flux: normalisation=<flux>."
+            )
+
+    def _reduce_model(self, samples: Any, squared: np.ndarray) -> VisibilitySet:
+        """``|V_0|**2 / |V_1|**2`` per observed sample, on index 0's axes, mask propagated."""
+        self._require_expansion()
+        trailing = self._trailing
+        total = int(samples.n_samples)
+        if total % (2 * trailing):
+            raise TransformationError(
+                f"SquaredAmplitude(normalisation='model') was given {total} visibilities, which "
+                f"is not a multiple of 2 (the sample and its zero-spacing twin) times the "
+                f"{trailing} the steps after it added. Build the step and the instrument "
+                f"together, so configure_from runs on the pair ampere will evaluate."
+            )
+        n_out = total // 2
+        shaped = np.asarray(squared, dtype=DTYPE).reshape(-1, 2, trailing)
+        ratio = (shaped[:, 0, :] / shaped[:, 1, :]).reshape(n_out)
+        kept = (slice(None), 0, slice(None))
+        coordinates = {
+            name: samples.axis(name).values.reshape(-1, 2, trailing)[kept].reshape(n_out)
+            for name in ("u", "v", "spectral_axis")
+        }
+        mask = None
+        if samples.mask is not None:
+            mask = propagate_mask(samples, _AveragingStep._influence(n_out, 2, trailing))
+        return VisibilitySet(
+            coordinates["u"],
+            coordinates["v"],
+            coordinates["spectral_axis"] * (samples.spectral_axis.unit or SPECTRAL_UNIT),
+            ratio,
+            unit=None,
+            mask=mask,
+        )
 
     def _scale(self, unit: u.UnitBase | None) -> float:
         """The factor ``|V|**2`` in *unit* squared is multiplied by: one, or ``(c/F)**2``."""
@@ -1193,6 +1314,8 @@ class SquaredAmplitude(_Step):
 
     def apply(self, samples: Any, values: Any) -> VisibilitySet:
         modulus = np.abs(np.asarray(samples.values))
+        if self._mode == "model":
+            return self._reduce_model(samples, modulus * modulus)
         return self._finish(samples, modulus * modulus * self._scale(samples.unit))
 
 
