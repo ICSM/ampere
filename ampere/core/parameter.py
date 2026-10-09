@@ -168,6 +168,43 @@ def _check_local_name(name: object, kind: str = "parameter") -> str:
     return checked
 
 
+def _check_component_path(name: object, kind: str = "component path") -> str:
+    """Validate a component label optionally followed by a path inside it (**W7.1**).
+
+    ``"obj0"`` (a bare component label) or ``"d0.likelihood"`` /
+    ``"d0.instrument.calibrate"`` (the component, then the components inside
+    it, one level per segment). Every segment is checked as a bare local name,
+    so the grammar is exactly "identifiers joined by :data:`SEPARATOR`"; what
+    the segments *resolve* to is checked at the merge, where the retained
+    inner mappings are known.
+    """
+    if not isinstance(name, str) or not name:
+        raise ParameterError(f"a {kind} must be a non-empty string, got {name!r}")
+    for segment in name.split(SEPARATOR):
+        if not segment.isidentifier():
+            raise ParameterError(
+                f"{kind} {name!r} is not usable: it must be a component label, optionally "
+                f"followed by a {SEPARATOR!r}-separated path inside that component "
+                f"('d0.likelihood'), and every segment must be a valid Python identifier."
+            )
+    return name
+
+
+def _split_component_path(entry: str) -> tuple[str, str]:
+    """Split an ``over`` entry into its component and the path inside it.
+
+    ``"d0.instrument.calibrate"`` gives ``("d0", "instrument.calibrate")``;
+    a bare entry gives an empty path, ``"obj0"`` → ``("obj0", "")``.
+    """
+    component, _, rest = entry.partition(SEPARATOR)
+    return component, rest
+
+
+def _leaf_name(rest: str, member: str) -> str:
+    """The name a member takes in its component's declaration: ``rest.member`` or ``member``."""
+    return f"{rest}{SEPARATOR}{member}" if rest else member
+
+
 #: Public attribute names of ``torch.nn.Module``, pinned here as a literal.
 #:
 #: ``ampere.core`` must never import torch (``architecture.md`` §4 rule 2), so
@@ -1940,11 +1977,18 @@ class PlateBinding:
     qualified merged name** of the array-valued parameter (after
     qualification and tie collapse, e.g. ``"population.objects.theta"``) —
     fully qualified rather than bare, because two components may each hold a
-    plate of the same local name. ``local_name`` is the bare name under which
+    plate of the same local name. ``local_name`` is the name under which
     the element arrives in the receiving component's ``distribute`` output;
     it must not collide with any name that component already receives, and
     the receiving component's own :class:`ParameterSet` does **not** declare
     it — consuming the routed element is the composing caller's contract.
+
+    **W7.1**: ``local_name`` may be a qualified path relative to the
+    component (``"likelihood.amplitude"``), for a component merged as a
+    :class:`ParameterMapping` (a dataset): the composite's retained mapping
+    consumes it on the second routing hop it already takes for every other
+    value, so nothing in :meth:`ParameterMapping.distribute` changes.
+    ``component`` stays a bare top-level label.
     """
 
     parameter: str
@@ -1955,7 +1999,7 @@ class PlateBinding:
     def __post_init__(self) -> None:
         object.__setattr__(self, "parameter", _check_name(self.parameter, "plate binding"))
         _check_local_name(self.component, "plate binding component")
-        _check_local_name(self.local_name, "plate binding local name")
+        _check_component_path(self.local_name, "plate binding local name")
         raw = self.index
         index: int | tuple[int, ...]
         if isinstance(raw, (int, np.integer)) and not isinstance(raw, bool):
@@ -2046,6 +2090,16 @@ class Population:
         element *i* reaches ``over[i]``. Empty means a population with no
         per-member components — N members fitted from one stacked dataset,
         which is :class:`Plate` with a component label attached.
+
+        **W7.1**: an entry may be a qualified component path,
+        ``component[.path]`` — ``"d0.likelihood"`` (a dataset's flexible
+        likelihood, so the member ``amplitude`` reaches
+        ``d0.likelihood.amplitude``) or ``"d0.instrument.calibrate"`` (one
+        instrument step, two levels down). The path names the plain set
+        *inside* a composite that declares the member; it is resolved at the
+        merge through the retained inner mappings, one segment per level, and
+        a composite named *without* a path is refused with this form as the
+        remedy. One path per entry; the member names stay identifiers.
     size
         The number of members; required only when *over* is empty.
     layout
@@ -2177,7 +2231,7 @@ class Population:
                     f"(parameters.md §12.2)."
                 )
         for label in self.over:
-            _check_local_name(label, "population member component")
+            _check_component_path(label, "population member component")
         if len(set(self.over)) != len(self.over):
             duplicated = sorted({c for c in self.over if self.over.count(c) > 1})
             raise ParameterError(
@@ -2315,17 +2369,20 @@ class Population:
         if self.layout != "plate":
             return ()
         omitted = set(internal)
-        return tuple(
-            PlateBinding(
-                parameter=self.qualified(member.name),
-                component=label,
-                local_name=member.name,
-                index=index,
+        bindings: list[PlateBinding] = []
+        for index, entry in enumerate(self.over):
+            component, rest = _split_component_path(entry)
+            bindings.extend(
+                PlateBinding(
+                    parameter=self.qualified(member.name),
+                    component=component,
+                    local_name=_leaf_name(rest, member.name),
+                    index=index,
+                )
+                for member in self.members
+                if member.name not in omitted
             )
-            for index, label in enumerate(self.over)
-            for member in self.members
-            if member.name not in omitted
-        )
+        return tuple(bindings)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -3582,6 +3639,16 @@ def _apply_populations(
     member's own bare local name, so per-object models compose unmodified,
     which is the whole of H-1's argument.
 
+    **Qualified paths (W7.1).** An ``over`` entry ``component.rest`` names
+    the plain set *inside* a composite that declares the member. ``rest`` is
+    validated by walking the retained inner mappings, one segment per level
+    (:func:`_resolve_component_path`); the member's leaf is ``rest.member`` in
+    the component's **outer** declaration, and every check below runs
+    against it. The plate layout strips the leaf from that outer copy only
+    and routes the element under the qualified ``local_name`` — the
+    composite's own mapping still declares the leaf and takes the second hop
+    — so routing is unchanged (``hierarchical_population.md`` §11 Q1).
+
     **The two member rules (W7.0).** A routed member must be declared by
     **every** ``over`` component — refused here, by name, rather than failing
     at the first model evaluation with an unknown keyword (and the flat
@@ -3608,39 +3675,36 @@ def _apply_populations(
                 f"that label is already taken; pass label='...' to the Population, or rename "
                 f"the component."
             )
-        if label in population.over:
+        addresses = [_split_component_path(entry) for entry in population.over]
+        if label in {component for component, _ in addresses}:
             raise ParameterError(
                 f"population {population.name!r} names its own component {label!r} in `over`; "
                 f"the hyperpriors are not one of their own draws."
             )
-        for member_label in population.over:
+        for entry, (member_label, rest) in zip(population.over, addresses, strict=True):
             if member_label not in updated:
                 raise ParameterError(
                     f"population {population.name!r} routes a draw to component "
                     f"{member_label!r}, which this merge does not have; components are "
                     f"{sorted(updated)}."
                 )
-            if member_label in inner:
-                raise ParameterError(
-                    f"population {population.name!r} routes a draw to component "
-                    f"{member_label!r}, which was merged as a ParameterMapping (a Dataset, or "
-                    f"another composite). A population addresses its members by *bare* local "
-                    f"name, and a composite's merged names are qualified ('likelihood.scale'), "
-                    f"so the draw would never reach a leaf. Declare the population over the "
-                    f"models those datasets name, or share one quantity across them with a "
-                    f"Tie."
-                )
-        internal = _internal_members(population, updated)
+            _resolve_component_path(population, entry, member_label, rest, inner)
+        internal = _internal_members(population, addresses, updated, inner)
         ordered.append(label)
         updated[label] = list(population.parameter_set())
         rename = {name: population.qualified(name) for name in population.hyperprior_names}
-        for member_label in population.over:
+        for member_label, rest in addresses:
             existing = {parameter.name: parameter for parameter in updated[member_label]}
             for member in population.members:
                 if member.name in internal:
                     continue
-                site = f"{member_label}{SEPARATOR}{member.name}"
-                current = existing.get(member.name)
+                # W7.1: with a path, the member's leaf in the component's
+                # *outer* declaration is the qualified name the composite's
+                # merge gave it ("likelihood.amplitude"); bare, it is the
+                # member's own name, as W5.12 had it.
+                leaf = _leaf_name(rest, member.name)
+                site = f"{member_label}{SEPARATOR}{leaf}"
+                current = existing.get(leaf)
                 if current is not None:
                     if current.shape != member.shape:
                         raise ParameterError(
@@ -3670,27 +3734,111 @@ def _apply_populations(
                             f"drawn from one prior — pick one."
                         )
                 if population.layout == "plate":
+                    # The strip is on the outer declaration only: the
+                    # composite's own retained mapping still declares the
+                    # leaf, which is what lets its second routing hop accept
+                    # the element (parameters.md §8, Amended W7.1).
                     if current is not None:
                         updated[member_label] = [
                             parameter
                             for parameter in updated[member_label]
-                            if parameter.name != member.name
+                            if parameter.name != leaf
                         ]
                     continue
                 prior = member.prior
                 if isinstance(prior, HierarchicalPrior):
                     prior = prior.rename_references(rename)
-                replacement = dataclasses.replace(member, prior=prior, plate=None)
+                replacement = dataclasses.replace(member, name=leaf, prior=prior, plate=None)
                 updated[member_label] = [
-                    replacement if entry.name == member.name else entry
-                    for entry in updated[member_label]
+                    replacement if entry.name == leaf else entry for entry in updated[member_label]
                 ]
         extra.extend(population.plate_bindings(internal=internal))
     return tuple(ordered), updated, (*plate_bindings, *extra)
 
 
+def _resolve_component_path(
+    population: Population,
+    entry: str,
+    component: str,
+    rest: str,
+    inner: Mapping[str, ParameterMapping],
+) -> None:
+    """Validate one ``over`` entry's path against the retained inner mappings (**W7.1**).
+
+    Validation only — routing needs none of it, because the composite's outer
+    declaration already holds the flat qualified leaf and each level's retained
+    mapping takes its own hop. The path resolves one segment per level; the
+    last segment must name a component merged as a plain set, whose
+    parameters are the leaves.
+    """
+    mapping = inner.get(component)
+    if not rest:
+        if mapping is not None:
+            raise ParameterError(
+                f"population {population.name!r} routes a draw to component {component!r}, "
+                f"which was merged as a ParameterMapping (a Dataset, or another composite), "
+                f"without a path. A composite's merged names are qualified "
+                f"('likelihood.amplitude'), so a bare member would never reach a leaf. Name the "
+                f"component inside it that declares the member — over=['{component}.likelihood', "
+                f"...], or DatasetCollection.plate(..., within='likelihood') — or share one "
+                f"quantity across the composites with a Tie. The components inside "
+                f"{component!r} are {list(mapping.components)}."
+            )
+        return
+    if mapping is None:
+        raise ParameterError(
+            f"population {population.name!r}: over entry {entry!r} gives a path inside "
+            f"{component!r}, but {component!r} is a ParameterSet, not a composite; address it "
+            f"without a path ({component!r})."
+        )
+    walked = component
+    segments = rest.split(SEPARATOR)
+    for position, segment in enumerate(segments):
+        if segment not in mapping.components:
+            raise ParameterError(
+                f"population {population.name!r}: over entry {entry!r} does not resolve — "
+                f"{walked!r} has no component {segment!r}; the components at that level are "
+                f"{list(mapping.components)}."
+            )
+        walked = f"{walked}{SEPARATOR}{segment}"
+        deeper = mapping.inner.get(segment)
+        last = position == len(segments) - 1
+        if last and deeper is not None:
+            raise ParameterError(
+                f"population {population.name!r}: over entry {entry!r} ends at {walked!r}, "
+                f"which is itself a composite; extend the path to the component inside it that "
+                f"declares the member — the components inside {walked!r} are "
+                f"{list(deeper.components)}."
+            )
+        if not last and deeper is None:
+            raise ParameterError(
+                f"population {population.name!r}: over entry {entry!r} continues past "
+                f"{walked!r}, but {walked!r} is a ParameterSet, not a composite; end the path "
+                f"there ({walked!r})."
+            )
+        if deeper is not None:
+            mapping = deeper
+
+
+def _collapsed_into(mapping: ParameterMapping | None, leaf: str) -> str | None:
+    """The merged name an inner ``shared_as``/``Tie`` collapsed *leaf* into, if any (W7.1)."""
+    if mapping is None:
+        return None
+    for binding in mapping.bindings:
+        if (
+            binding.index is None
+            and f"{binding.component}{SEPARATOR}{binding.local_name}" == leaf
+            and binding.global_name != leaf
+        ):
+            return binding.global_name
+    return None
+
+
 def _internal_members(
-    population: Population, declarations: Mapping[str, Sequence[Parameter]]
+    population: Population,
+    addresses: Sequence[tuple[str, str]],
+    declarations: Mapping[str, Sequence[Parameter]],
+    inner: Mapping[str, ParameterMapping],
 ) -> frozenset[str]:
     """The population's internal members, after checking both member rules (W7.0).
 
@@ -3698,6 +3846,12 @@ def _internal_members(
     refused by name. Rule 1: a member declared by none is internal, which is
     permitted only when a derived member of the same population references it
     (by its bare name), and never in the flat layout.
+
+    **W7.1**: each ``over`` entry is ``(component, rest)``, and the member's
+    leaf is ``rest.member`` in the component's outer declaration. A leaf an
+    inner ``shared_as`` collapsed is absent there under its declared name and
+    present under its tie label; it is refused naming that label (the leaf
+    exists, so it is neither internal nor undeclared — it is shared).
     """
     if not population.over:
         return frozenset()
@@ -3709,15 +3863,25 @@ def _internal_members(
     }
     internal: set[str] = set()
     for member in population.members:
-        declaring = [
-            label
-            for label in population.over
-            if any(parameter.name == member.name for parameter in declarations[label])
-        ]
+        declaring: list[str] = []
+        for entry, (component, rest) in zip(population.over, addresses, strict=True):
+            leaf = _leaf_name(rest, member.name)
+            if any(parameter.name == leaf for parameter in declarations[component]):
+                declaring.append(entry)
+                continue
+            collapsed = _collapsed_into(inner.get(component), leaf)
+            if collapsed is not None:
+                raise ParameterError(
+                    f"population {population.name!r} would make {component}{SEPARATOR}{leaf} a "
+                    f"draw from the population, but an inner shared_as / Tie collapsed it into "
+                    f"{component}{SEPARATOR}{collapsed} (tie label {collapsed!r}). Sharing "
+                    f"collapses N sites into one value; a population keeps them N, drawn from "
+                    f"one prior — pick one."
+                )
         if len(declaring) == len(population.over):
             continue
         if declaring:
-            missing = [label for label in population.over if label not in declaring]
+            missing = [entry for entry in population.over if entry not in declaring]
             raise ParameterError(
                 f"population {population.name!r} routes member {member.name!r} to every "
                 f"component in `over`, but {missing} do not declare it (while {declaring} do). "
@@ -3734,11 +3898,21 @@ def _internal_members(
                 f"use layout='plate'."
             )
         if member.name not in referenced:
+            component, rest = addresses[0]
+            leaf = _leaf_name(rest, member.name)
+            prefix = f"{rest}{SEPARATOR}" if rest else ""
+            available = [
+                parameter.name[len(prefix) :]
+                for parameter in declarations[component]
+                if parameter.name.startswith(prefix)
+                and SEPARATOR not in parameter.name[len(prefix) :]
+            ]
             raise ParameterError(
                 f"population {population.name!r}: member {member.name!r} is declared by none "
-                f"of the components in `over`, so it would be routed nowhere, and no derived "
-                f"member references it. An internal member is permitted only as an input of a "
-                f"derived member of the same population (the non-centred "
+                f"of the components in `over` ({population.over[0]!r} declares no {leaf!r}; "
+                f"its parameters there are {available}), so it would be routed nowhere, and no "
+                f"derived member references it. An internal member is permitted only as an "
+                f"input of a derived member of the same population (the non-centred "
                 f"theta = mu + sigma * z); otherwise every member component must declare it."
             )
         internal.add(member.name)
