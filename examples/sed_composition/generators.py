@@ -28,11 +28,13 @@ from __future__ import annotations
 import astropy.units as u
 import numpy as np
 
+from ampere.backends.reference import planck_jy
 from ampere.core import Instrument, Model, PhotometricPoints, Spectrum, negotiate
 
 __all__ = [
     "CALIBRATION_TRUTH",
     "PHOTOMETRY_FRACTIONAL_NOISE",
+    "SCALE_TO_JY",
     "SEED",
     "SPECTRUM_FRACTIONAL_NOISE",
     "TRUTH",
@@ -43,12 +45,16 @@ __all__ = [
 #: ``FittingProblem(..., seed=SEED)``) the sampler's own streams.
 SEED = 20260913
 
+#: :math:`B_\\nu(180\\,\\mathrm{K})` at the model's 250 µm reference wavelength,
+#: Jy/sr: the factor (about 6.749e12) that maps the solid angle this example
+#: injected before W7.15 (1e-15 sr) onto the flux form's ``scale``, in Jy.
+SCALE_TO_JY: float = float(planck_jy(np.array([250.0]), 180.0)[0])
+
 #: The injected physical truth — a cool, optically thin dust greybody.
-#: ``scale`` is dimensionless (it is what turns :math:`B_\\nu(T)`, in Jy/sr,
-#: into an observed flux density — the source's solid angle, in effect), so
-#: its natural size is tiny; the flux it produces is not — see
-#: :mod:`.sed_composition`'s docstring for the numbers.
-TRUTH: dict[str, float] = {"temperature": 180.0, "beta": 1.6, "scale": 1.0e-15}
+#: ``scale`` is the flux density in Jy at the 250 µm reference wavelength
+#: (W7.15): 1e-15 sr of the Planck radiance, 6.749e-3 Jy — computed, so it is
+#: the same source the example injected before the flux form.
+TRUTH: dict[str, float] = {"temperature": 180.0, "beta": 1.6, "scale": 1.0e-15 * SCALE_TO_JY}
 
 #: The spectrum's calibration nuisance parameter (``irs.instrument.calibration_scale.scale``
 #: once bound into a problem) — a deliberate 2 % miscalibration relative to the

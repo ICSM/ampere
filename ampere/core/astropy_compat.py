@@ -66,10 +66,11 @@ The worked case, which ``tests/core/test_astropy_compat.py`` holds to the
 ``BlackBody(temperature=T*u.K, scale=1.0*u.Jy/u.sr)`` emits ``B_nu`` in Jy/sr,
 and ``equivalencies=[u.dimensionless_angles()]`` states a solid angle of
 **exactly one steradian** — which is the same convention
-:class:`ampere.backends.reference.BlackBody` carries in its dimensionless
-``scale``, the factor that absorbs the solid angle and the distance dilution
-together. The two models are then the same physics written twice, and the
-conformance row compares them digit for digit rather than approximately.
+:class:`ampere.backends.reference.BlackBody` carries in its solid-angle form,
+``BlackBody(..., solid_angle=...)``, whose ``scale`` (in steradian) absorbs
+the solid angle and the distance dilution together. The two models are then
+the same physics written twice, and the conformance row compares them digit
+for digit rather than approximately.
 """
 
 from __future__ import annotations
@@ -548,7 +549,7 @@ class AdaptedAstropyModel(Model):
                 f"emits) becomes a flux density only through a solid angle: state it. The usual "
                 f"answer is equivalencies=[astropy.units.dimensionless_angles()], which declares "
                 f"a solid angle of exactly one steradian and is the convention "
-                f"ampere.backends.reference.BlackBody's dimensionless 'scale' carries; put the "
+                f"ampere.backends.reference.BlackBody(..., solid_angle=...) carries; put the "
                 f"real solid angle in the astropy model's own scale parameter."
             ) from exc
         if not np.allclose(doubled, 2.0 * factor, rtol=0.0, atol=0.0):

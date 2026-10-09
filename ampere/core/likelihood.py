@@ -119,7 +119,7 @@ from .parameter import (
     Parameterised,
     ParameterSet,
 )
-from .results_schema import ClosurePhases, FunctionSamples, Layout
+from .results_schema import ClosurePhases, FunctionSamples, Layout, PhotometricPoints
 
 __all__ = [
     "DTYPE",
@@ -5005,6 +5005,78 @@ class VonMisesFamily(LikelihoodFamily):
 # ---------------------------------------------------------------------------
 
 
+def align_by_filter(
+    predicted: PhotometricPoints, observed: PhotometricPoints, *, censored: bool = False
+) -> PhotometricPoints:
+    """*observed* re-keyed onto *predicted*'s filters: photometric alignment by name (W7.15).
+
+    A :class:`~ampere.core.PhotometricPoints` sample's identity is its filter
+    name (``results_schema.md`` §12), so alignment on that kind keys on the
+    name, not the wavelength. The instrument step tabulates each filter on the
+    model's grid and emits its *own* effective wavelength, which differs from a
+    catalogue's pivot wavelength in the second decimal; the step's wavelength
+    is the one adopted, and every downstream consumer — the likelihood's
+    residual, a GP kernel's distances, the derived groups and the plots — sees
+    it. The observed values, uncertainties, mask and extra coordinates are
+    reordered into the step's filter order, once, at composition.
+
+    Returns *observed* itself when its filters and spectral axis already are
+    the step's, so an aligned problem is untouched.
+
+    Raises
+    ------
+    LikelihoodError
+        If an observed filter is not one the step tabulates, or a step filter
+        has no observation — each direction by name — or if the order differs
+        while a :class:`Censoring` declaration (aligned index by index with the
+        observed container as the user built it) is in force.
+    """
+    step = [str(name) for name in predicted.filters]
+    data = [str(name) for name in observed.filters]
+    untabulated = sorted(set(data) - set(step))
+    unobserved = sorted(set(step) - set(data))
+    if untabulated or unobserved:
+        problems = []
+        if untabulated:
+            problems.append(
+                f"observed filter(s) {untabulated} are not tabulated by the instrument chain"
+            )
+        if unobserved:
+            problems.append(f"the chain's filter(s) {unobserved} have no observation")
+        raise LikelihoodError(
+            f"PhotometricPoints align by filter name, and {'; '.join(problems)}. The chain "
+            f"emits {step}; give the photometry step exactly the observed filters (or drop the "
+            f"observations it does not tabulate), so each predicted point has its observation."
+        )
+    if data == step and observed.spectral_axis == predicted.spectral_axis:
+        return observed
+    if data != step and censored:
+        raise LikelihoodError(
+            f"the observed PhotometricPoints list their filters in another order ({data}) than "
+            f"the instrument chain emits them ({step}), and a Censoring declaration is aligned "
+            f"index by index with the observed container, so ampere will not reorder it. Build "
+            f"the observed container and its Censoring in the chain's order."
+        )
+    position = {name: index for index, name in enumerate(data)}
+    order = np.array([position[name] for name in step], dtype=int)
+    extras = {
+        name: np.asarray(values)[order]
+        for name, values in observed.extra_coords.items()
+        if name != "filters"
+    }
+    return PhotometricPoints(
+        predicted.filters,
+        predicted.spectral_axis.quantity(),
+        np.asarray(observed.values)[order],
+        unit=observed.unit,
+        uncertainty=None if observed.uncertainty is None else observed.uncertainty[order],
+        mask=None if observed.mask is None else observed.mask[order],
+        extra_coords=extras or None,
+        fidelity=observed.fidelity,
+        meta=observed.meta,
+    )
+
+
 class Likelihood(Parameterised):
     """A family, a noise model and (optionally) a censoring declaration.
 
@@ -5362,8 +5434,17 @@ class Likelihood(Parameterised):
         comparison is a composition-time obligation, matching
         ``results_schema.md`` §10's compile-once/evaluate-many split. W1.7's
         ``Dataset`` calls it when the problem is assembled.
+
+        :class:`~ampere.core.PhotometricPoints` against
+        :class:`~ampere.core.PhotometricPoints` align by filter name (W7.15,
+        :func:`align_by_filter`): the observed filters must be exactly the ones
+        the chain emits, in any order, and the step's wavelengths are adopted —
+        the observed container's own axis is not compared. ``Dataset`` keeps
+        the re-keyed container as its ``observed``.
         """
         self._check_kinds(predicted, observed)
+        if isinstance(predicted, PhotometricPoints) and isinstance(observed, PhotometricPoints):
+            observed = align_by_filter(predicted, observed, censored=self._censoring is not None)
         if predicted.shape != observed.shape:
             raise LikelihoodError(
                 f"the predicted {type(predicted).__name__} has shape {predicted.shape} but the "

@@ -225,15 +225,21 @@ class TestNativeModels:
         )
 
     def test_the_blackbody_temperature_takes_a_gradient(self) -> None:
-        """A finite-difference check, because ``dB/dT`` has no short closed form."""
+        """A finite-difference check, because ``dB/dT`` has no short closed form.
+
+        The oracle is the reference backend's own ``BlackBody`` (W7.15: the flux
+        form divides the Planck function by its value at ``reference_wavelength``,
+        so the bare ``planck_jy`` is no longer the model).
+        """
         model = BlackBody(GRID)
         temperature = torch.tensor(1200.0, dtype=torch.float64, requires_grad=True)
         model.evaluate_tensor(temperature=temperature, scale=tensor(1.0))[
             "default"
         ].sum().backward()
         step = 1e-4
-        plus = float(np.sum(ref.planck_jy(GRID, 1200.0 + step)))
-        minus = float(np.sum(ref.planck_jy(GRID, 1200.0 - step)))
+        oracle = ref.BlackBody(GRID)
+        plus = float(np.sum(oracle(temperature=1200.0 + step, scale=1.0)["default"].values))
+        minus = float(np.sum(oracle(temperature=1200.0 - step, scale=1.0)["default"].values))
         assert float(temperature.grad) == pytest.approx((plus - minus) / (2.0 * step), rel=1e-6)
 
     def test_the_container_boundary_is_where_the_graph_stops(self) -> None:

@@ -33,11 +33,11 @@ The injected source (``examples.sed_composition.generators.TRUTH``) is a
 that it has essentially nothing to say in the near infrared and most of its
 flux beyond 20 micron, which is realistic for the instrument combination
 below (a debris disk or an embedded protostar, not a stellar photosphere).
-``scale`` is dimensionless — it is what turns :math:`B_\nu(T)`, in Jy/sr,
-into an observed flux density, i.e. the source's solid angle in effect — so
-its natural size is of order :math:`10^{-15}`, not a flux; the flux the
-instruments actually see comes out at a few tenths of a Jy to a few Jy, a
-sensible size for a catalogued mid/far-infrared source. The catalogue's five
+``scale`` is the flux density in Jy at the model's 250 µm reference
+wavelength — 6.749e-3 Jy for this source (since W7.15; it was the solid angle,
+1e-15 sr, before) — and the flux the instruments actually see comes out at a
+few tenths of a Jy to a few Jy, a sensible size for a catalogued
+mid/far-infrared source. The catalogue's five
 filters, below, are mid/far-infrared only for exactly this reason — a first
 draft of this example included 2MASS J/Ks and found the source at
 :math:`10^{-19}` Jy there: harmless for emcee, but the extreme dynamic range
@@ -238,10 +238,12 @@ interval:
       posterior (truth in brackets, 95 % coverage flagged):
         irs.instrument.calibration_scale.scale        +0.997 +- 0.034   95%[+0.937, +1.080]  (truth +1.02)  ok
         model.beta                                    +1.526 +- 0.431   95%[+0.508, +2.202]  (truth +1.6)  ok
-        model.scale                                   +2.24e-15 +- 2.6e-15   95%[+4.30e-16, +8.14e-15]  (truth +1e-15)  ok
+        model.scale                                   +0.0151 +- 0.0175   95%[+0.00290, +0.0549]  (truth +0.00675)  ok
         model.temperature                             +177.9 +- 26.6   95%[+87.2, +216.4]  (truth +180)  ok
 
-(Figures are rounded here; the branch report for W4.11 has the exact values
+(``model.scale``'s line is in Jy at 250 µm since W7.15, 2026-10-09: the W4.11
+run's numbers, recorded in steradian, multiplied by :math:`B_\nu` (180 K,
+250 µm); the run was not repeated.) (Figures are rounded here; the branch report for W4.11 has the exact values
 from one specific run — every random draw is seeded, so re-running the
 script reproduces them exactly.) ``model.temperature``, ``model.beta`` and
 ``model.scale`` are the classic modified-blackbody degeneracy — wide, and

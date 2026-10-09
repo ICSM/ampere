@@ -100,7 +100,9 @@ a fast, always-on suite at a tiny budget. The full-budget recovery this
 item's tutorial page quotes is not part of that suite -- see its docstring
 for why -- and is instead verified by running this module directly, once per
 ``tie``/``gp`` combination, through the gate lock; the branch report has the
-numbers from doing exactly that.
+numbers from doing exactly that. ``model.scale``'s row is in Jy since W7.15:
+the recorded numbers map by :data:`generators.SCALE_TO_JY` (truth 6.749e-3 Jy
+at 250 µm), and the budgets were not re-run.
 """
 
 from __future__ import annotations
@@ -244,7 +246,9 @@ def build_model() -> ModifiedBlackBody:
         GRID,
         temperature=st.uniform(50.0, 400.0),
         beta=st.uniform(0.5, 2.5),
-        scale=st.loguniform(1e-16, 1e-14),
+        # Jy at 250 micron (W7.15): the pre-flux-form box, 1e-16 to 1e-14 sr,
+        # mapped at the truth temperature -- about 6.7e-4 to 6.7e-2 Jy.
+        scale=st.loguniform(1e-16 * generators.SCALE_TO_JY, 1e-14 * generators.SCALE_TO_JY),
         channels="sed",
     )
 

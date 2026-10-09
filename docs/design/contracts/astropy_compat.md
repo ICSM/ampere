@@ -190,7 +190,7 @@ will not invent one. A surface brightness (anything per steradian — which is e
 astropy's BlackBody emits) becomes a flux density only through a solid angle: state it.
 The usual answer is equivalencies=[astropy.units.dimensionless_angles()], which declares
 a solid angle of exactly one steradian and is the convention
-ampere.backends.reference.BlackBody's dimensionless 'scale' carries; put the real solid
+ampere.backends.reference.BlackBody(..., solid_angle=...) carries; put the real solid
 angle in the astropy model's own scale parameter.
 
 ```
@@ -198,8 +198,10 @@ angle in the astropy model's own scale parameter.
 The convention, stated: `scale=1.0*u.Jy/u.sr` puts astropy's `B_nu` in Jy/sr,
 and `equivalencies=[u.dimensionless_angles()]` declares a solid angle of
 **exactly one steradian**. That is the same convention
-`ampere.backends.reference.BlackBody` carries in its dimensionless `scale` —
-the factor that absorbs the solid angle and the distance dilution together — so
+`ampere.backends.reference.BlackBody` carries in its solid-angle form,
+`BlackBody(..., solid_angle=...)` *(Amended W7.15: the default form's `scale` is
+the flux in Jy at `reference_wavelength`)* — a `scale` in steradian that absorbs
+the solid angle and the distance dilution together — so
 the two are the same physics written twice, and
 `TestItAgreesWithTheReferenceModels` compares their `log_prob` at the
 conformance suite's `exact` tolerance class (1e-12 relative) rather than

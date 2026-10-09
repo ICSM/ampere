@@ -307,7 +307,7 @@ does one or the other, and which one is part of the kind's definition.
 | `TimeSeries` | `time` | strictly increasing | same |
 | `Image`, `Cube` | `x`, `y` | strictly monotonic (either direction) | sky axes legitimately run either way |
 | `Cube` | `spectral_axis` | strictly increasing | as `Spectrum` |
-| `PhotometricPoints` | `spectral_axis` | **any** | a point is identified by its filter, not its position; catalogues arrive in archive order |
+| `PhotometricPoints` | `spectral_axis` | **any** | a point is identified by its filter, not its position; catalogues arrive in archive order; alignment keys on the name (§12, *Amended W7.15*) |
 | `VisibilitySet` | `u`, `v`, `spectral_axis` | **any** | a (u,v) point set has no natural order; imposing one would be a fiction, and one wavelength repeats across every baseline of a channel |
 | `ClosurePhases` | `u1`, `v1`, `u2`, `v2`, `spectral_axis` | **any** | as `VisibilitySet`; the *canonical* ordering a triangle needs is a rule about which two baselines are stored, not about the order of the samples |
 
@@ -788,7 +788,15 @@ True
 
 `PhotometricPoints` — one value per uniquely named filter. The filter name is
 the *identity* of a point, so duplicates are refused; coordinate order is
-explicitly arbitrary.
+explicitly arbitrary. *(Amended W7.15.)* Alignment on this kind therefore keys
+on the name: `Likelihood.check_alignment` matches an observed
+`PhotometricPoints` to a predicted one by filter name, in any order, refuses
+by name an observed filter the instrument chain does not tabulate and a
+chain filter with no observation, and adopts the chain's own effective
+wavelengths — the observed container's spectral axis (a catalogue's pivot
+wavelengths, which differ from the step's in the second decimal) is not
+compared, and `Dataset` keeps the observed container re-keyed onto the
+chain's filters and wavelengths, once, at composition.
 
 ```pycon
 >>> phot = PhotometricPoints(
@@ -1012,6 +1020,7 @@ claims, demonstrated one side at a time.)*
 | Ordering is validated per kind, or documented as tolerated | `architecture.md` §7 forbids the third option — an unstated assumption — which is what legacy had |
 | `Spectrum`/`TimeSeries` require strictly increasing coordinates | Quasiseparable GP solvers need ordered 1D coordinates, and duplicates make a covariance singular; both fail in ways that look like science problems |
 | `from_unsorted` exists, but sorting is never automatic | Silently reordering a user's arrays is how the alignment between coordinates and values gets quietly broken; opting in is one call |
+| `PhotometricPoints` align by filter name, adopting the chain's wavelengths (*Amended W7.15*) | The name is the identity (§12), and a synthetic-photometry step's effective wavelength is its own, not the catalogue's pivot; comparing wavelengths refused a catalogue's own axis and left copying the step's axis from a dummy prediction as the only route (`user_journeys_memo.md` Appendix A, finding 3). Reordering the observed container is safe because a noise model reads coordinates with the values; a `Censoring` declaration is indexed by position, so a reordering under one is refused |
 | `PhotometricPoints`/`VisibilitySet`/`ClosurePhases` tolerate arbitrary order | A filter-keyed point and a (u,v) sample have no natural order; requiring one would be a fiction, so it is documented instead |
 | Two layouts (`POINTS`, `GRID`), neither implying regularity | Storing an image as 10⁴ scattered coordinates wastes memory for no gain; separability is a real distinction, regularity is not the same claim |
 | `regular`/`log_regular` advertised on the axis | `architecture.md` §7: fast paths may be *taken*, never *required*. `log_regular` earns its place because constant-velocity LSF convolution needs exactly it |

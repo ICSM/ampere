@@ -122,6 +122,45 @@ def planck_jy(wavelength: torch.Tensor, temperature: torch.Tensor) -> torch.Tens
     return radiance / _JY
 
 
+#: The sentinel telling "not given" apart from an explicit ``None``.
+_UNSET: Any = object()
+
+
+def _scale_form(scale: Any, solid_angle: Any) -> tuple[Any, bool]:
+    """Resolve the exclusive ``scale=`` / ``solid_angle=`` pair (W7.15).
+
+    Returns what was given for the one parameter, ``scale``, and whether it is
+    the solid-angle form. Neither keyword means the flux form at its default,
+    1 Jy at ``reference_wavelength``.
+    """
+    scale_given = scale is not _UNSET
+    angle_given = solid_angle is not _UNSET
+    if scale_given and angle_given:
+        raise ValueError(
+            "give scale= (the flux density in Jy at reference_wavelength) or solid_angle= "
+            "(steradian, multiplying the Planck radiance), not both: they are two "
+            "parametrisations of the one normalisation, 'scale'."
+        )
+    if angle_given:
+        if solid_angle is None:
+            raise ValueError(
+                "solid_angle=None leaves the model without a normalisation: give scale= "
+                "(the flux density in Jy at reference_wavelength) or solid_angle= (steradian)."
+            )
+        return solid_angle, True
+    return (1.0 if not scale_given else scale), False
+
+
+def _reference_micron(reference_wavelength: Any) -> float:
+    """The validated reference wavelength, bare micron."""
+    reference = float(_to_micron(reference_wavelength))
+    if not np.isfinite(reference) or reference <= 0.0:
+        raise ValueError(
+            f"reference_wavelength must be finite and positive (micron), got {reference!r}."
+        )
+    return reference
+
+
 class TorchSpectralModel(Model):
     """Shared plumbing: the grid buffer, the channels, and the template cache.
 
@@ -309,11 +348,14 @@ class TorchSpectralModel(Model):
 
 
 class BlackBody(TorchSpectralModel):
-    """``F_nu = scale * B_nu(T)`` — an isothermal blackbody in Jy.
+    """``F_nu = scale * B_nu(T, lambda) / B_nu(T, lambda_ref)`` — an isothermal blackbody in Jy.
 
-    ``scale`` absorbs the solid angle (and any distance dilution): the
-    dimensionless factor turning the Planck radiance into an observed flux
-    density.
+    The reference backend's :class:`~ampere.backends.reference.BlackBody` with
+    a torch interior, and the same two forms: ``scale`` is the flux density in
+    Jy at ``reference_wavelength`` (default 250 µm; a stellar fit will want it
+    near the peak), and ``solid_angle=`` (steradian, exclusive with
+    ``scale=``) registers the same parameter, ``scale``, with unit ``sr`` and
+    the formula ``F_nu = scale * B_nu(T)``.
 
     Parameters
     ----------
@@ -322,7 +364,11 @@ class BlackBody(TorchSpectralModel):
     temperature
         Kelvin. A prior to fit it, a number to hold it fixed.
     scale
-        Dimensionless multiplier.
+        Jy, the flux density at ``reference_wavelength``. Default 1 Jy.
+    solid_angle
+        Steradian; the solid-angle form, exclusive with ``scale``.
+    reference_wavelength
+        Micron; a buffer. Unused by the solid-angle form.
     channels
         Name (or names) of the channel the emitted spectrum appears under.
     dtype, device
@@ -335,28 +381,44 @@ class BlackBody(TorchSpectralModel):
         wavelength: Any,
         *,
         temperature: Any = 1000.0,
-        scale: Any = 1.0,
+        scale: Any = _UNSET,
+        solid_angle: Any = _UNSET,
+        reference_wavelength: float = 250.0,
         channels: str | Sequence[str] = "default",
         dtype: torch.dtype = DEFAULT_DTYPE,
         device: torch.device = DEFAULT_DEVICE,
     ) -> None:
         super().__init__(wavelength, channels=channels, dtype=dtype, device=device)
+        given, self.solid_angle_form = _scale_form(scale, solid_angle)
+        reference = _reference_micron(reference_wavelength)
+        self.register_buffer("reference_wavelength", reference, unit=COORDINATE_UNIT)
+        self.tensors.register_buffer(
+            "reference_wavelength", as_tensor(reference, dtype=dtype, device=device)
+        )
         self.register_parameter(as_parameter("temperature", temperature, unit=u.K))
-        self.register_parameter(as_parameter("scale", scale))
+        unit = u.sr if self.solid_angle_form else u.Jy
+        self.register_parameter(as_parameter("scale", given, unit=unit))
 
     def _flux(self, grid: torch.Tensor, context: Mapping[str, torch.Tensor]) -> torch.Tensor:
-        return context["scale"] * planck_jy(grid, context["temperature"])
+        radiance = planck_jy(grid, context["temperature"])
+        if self.solid_angle_form:
+            return context["scale"] * radiance
+        normalisation = planck_jy(context["reference_wavelength"], context["temperature"])
+        return context["scale"] * radiance / normalisation
 
 
 class ModifiedBlackBody(TorchSpectralModel):
-    """``F_nu = scale * (lambda_0 / lambda)**beta * B_nu(T)`` — optically thin dust.
+    """``F_nu = scale * (lambda_ref / lambda)**beta * B_nu(T, lambda) / B_nu(T, lambda_ref)``.
 
-    ``reference_wavelength`` is where the emissivity is unity, so ``scale``
-    stays interpretable as the flux the source would have if it radiated as a
-    pure blackbody there; without it ``scale`` and ``beta`` are degenerate in a
-    way that makes the posterior hard to read. It is a **buffer**, not a
-    parameter — one would not put a prior on the definition of one's own
-    normalisation.
+    Optically thin dust. ``scale`` is the flux density, in Jy, at
+    ``reference_wavelength``, where the emissivity is unity and the Planck
+    function is divided by its own value; without the reference ``scale`` and
+    ``beta`` are degenerate in a way that makes the posterior hard to read. It
+    is a **buffer**, not a parameter — one would not put a prior on the
+    definition of one's own normalisation. ``solid_angle=`` (steradian,
+    exclusive with ``scale=``) is the solid-angle form: the same parameter,
+    ``scale``, with unit ``sr`` and the formula
+    ``F_nu = scale * (lambda_ref / lambda)**beta * B_nu(T)``.
     """
 
     def __init__(
@@ -365,29 +427,31 @@ class ModifiedBlackBody(TorchSpectralModel):
         *,
         temperature: Any = 100.0,
         beta: Any = 1.5,
-        scale: Any = 1.0,
+        scale: Any = _UNSET,
+        solid_angle: Any = _UNSET,
         reference_wavelength: float = 250.0,
         channels: str | Sequence[str] = "default",
         dtype: torch.dtype = DEFAULT_DTYPE,
         device: torch.device = DEFAULT_DEVICE,
     ) -> None:
         super().__init__(wavelength, channels=channels, dtype=dtype, device=device)
-        reference = float(_to_micron(reference_wavelength))
-        if not np.isfinite(reference) or reference <= 0.0:
-            raise ValueError(
-                f"reference_wavelength must be finite and positive (micron), got {reference!r}."
-            )
+        given, self.solid_angle_form = _scale_form(scale, solid_angle)
+        reference = _reference_micron(reference_wavelength)
         self.register_buffer("reference_wavelength", reference, unit=COORDINATE_UNIT)
         self.tensors.register_buffer(
             "reference_wavelength", as_tensor(reference, dtype=dtype, device=device)
         )
         self.register_parameter(as_parameter("temperature", temperature, unit=u.K))
         self.register_parameter(as_parameter("beta", beta))
-        self.register_parameter(as_parameter("scale", scale))
+        unit = u.sr if self.solid_angle_form else u.Jy
+        self.register_parameter(as_parameter("scale", given, unit=unit))
 
     def _flux(self, grid: torch.Tensor, context: Mapping[str, torch.Tensor]) -> torch.Tensor:
         emissivity = (context["reference_wavelength"] / grid) ** context["beta"]
-        return context["scale"] * emissivity * planck_jy(grid, context["temperature"])
+        flux = context["scale"] * emissivity * planck_jy(grid, context["temperature"])
+        if self.solid_angle_form:
+            return flux
+        return flux / planck_jy(context["reference_wavelength"], context["temperature"])
 
 
 class PowerLaw(TorchSpectralModel):

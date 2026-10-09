@@ -954,3 +954,90 @@ class TestMultiAxisCoordinate:
         tree = _tiny_run(problem, values={"model.flux": 1.0})
         with pytest.raises(ResultsError, match="component must be one of"):
             add_posterior_predictive(tree, problem, datasets=["vis"], component="modulus")
+
+
+# ---------------------------------------------------------------------------
+# W7.15: the persona-A plotting nits
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def long_run() -> tuple[FittingProblem, Any]:
+    """A 2 000-draw run of the toy, for the thinning rows."""
+    problem = toy()
+    return problem, run(problem, chains=1, draws=2000)
+
+
+class TestDerivedDrawsAreThinnedByDefault:
+    """``thin=None`` keeps at most ``MAX_DERIVED_DRAWS``; an integer means what it did."""
+
+    def test_the_default_keeps_at_most_the_ceiling_evenly_spaced(self, long_run: Any) -> None:
+        from ampere.results import MAX_DERIVED_DRAWS
+
+        problem, tree = long_run
+        group = add_posterior_predictive(tree, problem)["posterior_predictive"]
+        draws = np.asarray(group["draw"].values)
+        assert MAX_DERIVED_DRAWS == 200
+        assert draws.size <= MAX_DERIVED_DRAWS
+        assert draws[0] == 0 and draws[-1] == 1999
+        assert np.ptp(np.diff(draws)) <= 1
+
+    def test_thin_one_is_every_draw_and_thin_seven_every_seventh(self, long_run: Any) -> None:
+        problem, tree = long_run
+        every = add_residuals(tree, problem, thin=1)["residuals"]
+        assert np.asarray(every["draw"].values).size == 2000
+        seventh = add_posterior_predictive(tree, problem, thin=7)["posterior_predictive"]
+        np.testing.assert_array_equal(seventh["draw"].values, np.arange(0, 2000, 7))
+
+    def test_a_short_run_keeps_every_draw_by_default(self) -> None:
+        problem = gp_toy(DenseGP())
+        tree = gp_localisation(run(problem, draws=30), problem)
+        assert np.asarray(tree["gp_localisation"]["draw"].values).size == 30
+
+
+class TestTheLocalisationCaveatHasItsOwnRoom:
+    """The caveat no longer overdraws the x-axis label (Appendix B.2's nit)."""
+
+    def test_the_caveat_and_the_axis_label_do_not_overlap(self) -> None:
+        problem = gp_toy(DenseGP())
+        tree = gp_localisation(run(problem, draws=5), problem)
+        figure = plot_gp_localisation(tree)
+        figure.canvas.draw()
+        caveat = figure.texts[-1].get_window_extent()
+        label = figure.axes[0].xaxis.label.get_window_extent()
+        ticks = figure.axes[0].xaxis.get_tightbbox()
+        assert caveat.y1 < label.y0, (caveat, label)
+        assert caveat.y1 < ticks.y0
+        assert not caveat.overlaps(label)
+
+    def test_no_caveat_keeps_the_plain_layout(self) -> None:
+        problem = gp_toy(DenseGP())
+        tree = gp_localisation(run(problem, draws=5), problem)
+        figure = plot_gp_localisation(tree, show_caveat=False)
+        assert figure.texts == []
+
+
+class TestCornerContourWarningsAreSilenced:
+    """The library *logs* "Too few points to create valid contours" (root logger)."""
+
+    MESSAGE = "Too few points to create valid contours"
+
+    def test_no_too_few_points_message_escapes_a_short_run(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import corner
+
+        tree = run(toy(), chains=8, draws=12)
+        samples = np.column_stack(
+            [np.asarray(tree["posterior"][name].values).ravel() for name in sorted(TRUTH)]
+        )
+        # The precondition: the library itself does complain about these draws.
+        with caplog.at_level("WARNING"):
+            corner.corner(samples)
+        assert self.MESSAGE in caplog.text
+        caplog.clear()
+        with caplog.at_level("WARNING"), warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            plot_corner(tree)
+        assert self.MESSAGE not in caplog.text
+        assert not [w for w in caught if self.MESSAGE in str(w.message)]

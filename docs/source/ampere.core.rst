@@ -14,6 +14,12 @@ of one vocabulary. The one exception in spirit but not in policy is
 :class:`~ampere.core.QuasisepGP`, whose celerite2 dependency is a *base*
 dependency of the whole distribution and is imported lazily on first use.
 
+The model curve at a point is one call (**W7.15**):
+:meth:`FittingProblem.predict(values) <ampere.core.FittingProblem.predict>`
+returns the predicted container per dataset label — the model through each
+instrument chain, noise-free — by the same route ``simulate(observe=False)``
+takes; :class:`~ampere.core.Evaluation` stays the hot loop's record.
+
 .. automodule:: ampere.core
    :members:
    :imported-members:

@@ -1060,6 +1060,14 @@ False
 
 ```
 
+*(Added W7.15.)* `FittingProblem.predict(values)` is the model curve at a
+point in one call: a read-only mapping from dataset label to the predicted
+container — the model pushed through that dataset's instrument chain,
+noise-free — by the same route `simulate(observe=False)` takes, refusing by
+name a point the prior rules out and raising with the recorded reason where
+the model or a chain fails. `Evaluation` is deliberately not widened to carry
+it: it is the hot loop's per-draw record.
+
 A point outside the prior's support returns `-inf` **without evaluating the
 model**, which for an expensive simulator is the single most valuable thing this
 contract does:
@@ -2873,6 +2881,7 @@ True
 | Out-of-support returns NaN for `log_likelihood`, not `-inf`, and records no failure | "Not evaluated" ≠ "impossible"; zero prior mass is an answer |
 | `FailureReason` is a `StrEnum`, and counts are unbounded while history is not | A reason is only useful if it can be counted; a history must not leak memory over a 10⁶-proposal run |
 | Capability flags are class attributes on W1.5's ABCs, defaulting to the reference answers | Promoted at the freeze (ruled 2026-09-03, §19.6), replacing the interim `getattr` reads with identical semantics: every composed piece declares the three flags, silence inherits `False`/`False`/`"cpu"`, and `declared_capabilities` reads them directly |
+| `predict(values)` is its own method, and `Evaluation` stays as it was *(Added W7.15)* | A user wanting the median model on a plot recomputed it by hand (`user_journeys_memo.md` B.2); a prediction field on `Evaluation` would cost every stored draw of every run a container per dataset, so the convenience is one call on the problem, reusing `simulate`'s route |
 | `simulate` draws Gaussian observations and refuses everything else | A family declares only `log_prob`; guessing would train SBI on the wrong forward model |
 | `substream` lives in its own module | `lowering.md` §12.7 asked W1.13 to ratify or move it; **ratified in place** (ruled 2026-09-03) — pure stdlib+numpy, deliberately free-standing |
 | A bound-pinned mode starts mixed, not from the prior *(Amended W7.17)* | The ball is degenerate only on the pinned coordinates, so those take prior draws and the rest keep the ball; the warning's "widen or move the prior" was wrong advice for a physical floor, and only a problem the optimiser cannot start at all still falls back to the whole prior, loudly |

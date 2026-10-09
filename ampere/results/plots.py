@@ -479,6 +479,14 @@ def _render_corner_page(
             "to draw. That is a statement about the run, not about this plot: check the priors "
             "and the sampler's initialisation."
         )
+    # Silenced with the reason (W7.15): "Too few points to create valid
+    # contours" is the plotting library's statement about one 2-D histogram's
+    # contour levels, logged through the root logger, not a statement about the
+    # run — a corner plot of 24 000 draws logged it three times. How many draws
+    # were drawn is on the figure's own metadata, ``corner.draws``, below.
+    # ``quiet`` is the library's own switch for exactly that message and no
+    # other; a caller passing ``quiet=False`` gets it back.
+    kwargs.setdefault("quiet", True)
     figure = corner.corner(samples, labels=list(drawn_labels), truths=truths, **kwargs)
     _p.attach_metadata(figure, "corner.variables", ", ".join(label for label, _ in columns))
     _p.attach_metadata(figure, "corner.draws", str(int(samples.shape[0])))
@@ -1279,10 +1287,17 @@ def plot_gp_localisation(
     # drawn annotation is optional — diagnostics.md §4.3's "a caption a user can
     # silently crop out of a screenshot is not durable protection".
     _p.attach_metadata(figure, "gp_localisation_caveat", GP_LOCALISATION_CAVEAT)
-    figure.tight_layout()
-    if show_caveat:
-        figure.subplots_adjust(bottom=0.28)
-        figure.text(0.01, 0.01, _p.wrap(GP_LOCALISATION_CAVEAT), fontsize="x-small", va="bottom")
+    if not show_caveat:
+        figure.tight_layout()
+        return figure
+    # The caveat's own height is measured and reserved (W7.15): a fixed bottom
+    # margin let the wrapped text overdraw the x-axis label.
+    caveat = figure.text(
+        0.01, 0.01, _p.wrap(GP_LOCALISATION_CAVEAT), fontsize="x-small", va="bottom"
+    )
+    figure.canvas.draw()
+    reserved = (caveat.get_window_extent().y1 + 4.0) / figure.bbox.height
+    figure.tight_layout(rect=(0.0, min(reserved, 0.9), 1.0, 1.0))
     return figure
 
 

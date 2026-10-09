@@ -2784,3 +2784,139 @@ class TestFreezeAndLenientCompile:
             )
         # The unconfigured model is used, and the problem still evaluates.
         assert math.isfinite(problem.log_prob({"model.level": 1.0}))
+
+
+# ---------------------------------------------------------------------------
+# W7.15: photometric alignment keys on the filter name
+# ---------------------------------------------------------------------------
+
+#: The user-journeys memo's Appendix A bands (``docs/design/walkthroughs/persona_a.py``).
+APPENDIX_A_FILTERS = [
+    "2MASS_Ks",
+    "WISE_RSR_W1",
+    "WISE_RSR_W2",
+    "WISE_RSR_W3",
+    "WISE_RSR_W4",
+    "SPITZER_MIPS_24",
+    "SPITZER_MIPS_70",
+    "HERSCHEL_PACS_100",
+    "HERSCHEL_PACS_160",
+]
+
+
+class TestPhotometricAlignmentByName:
+    """Appendix A finding 3: a catalogue's own pivot wavelengths are accepted.
+
+    The step tabulates each filter on the model's grid and emits its own
+    effective wavelength, which differs from pyphot's pivot wavelength in the
+    second decimal; before W7.15 the observed container built on the pivot
+    wavelengths was refused, and the only route was to copy the step's axis
+    from a dummy prediction.
+    """
+
+    GRID = np.geomspace(1.5, 250.0, 600)
+
+    @staticmethod
+    def pivots(filters: list[str]) -> np.ndarray:
+        pyphot = pytest.importorskip("pyphot")
+        from ampere.backends.reference import bundled_filter_library
+
+        library = pyphot.get_library(fname=str(bundled_filter_library()))
+        return np.array([float(library[name].lpivot.to_value(u.um)) for name in filters])
+
+    def problem(self, observed_filters: list[str], step_filters: list[str]) -> FittingProblem:
+        from ampere.backends.reference import ModifiedBlackBody, SyntheticPhotometry
+
+        step = SyntheticPhotometry.from_library(step_filters, self.GRID)
+        instrument = Instrument([step], channel="default", label="phot")
+        model = ModifiedBlackBody(
+            self.GRID,
+            temperature=st.loguniform(30, 1500),
+            beta=st.uniform(0.5, 2.0),
+            scale=st.loguniform(1e-3, 1e3),
+            reference_wavelength=100.0,
+        )
+        rng = np.random.default_rng(1)
+        flux = rng.uniform(0.5, 5.0, len(observed_filters))
+        observed = PhotometricPoints(
+            observed_filters,
+            self.pivots(observed_filters) * u.um,
+            flux * u.Jy,
+            uncertainty=0.08 * flux * u.Jy,
+        )
+        return FittingProblem(model, {"phot": Dataset(observed, instrument)}, seed=1)
+
+    def test_a_catalogue_on_pivot_wavelengths_composes_evaluates_and_fits(self) -> None:
+        """The Appendix A probe as a row, with the catalogue in its own order."""
+        from ampere.inference import EmceeEngine
+
+        catalogue_order = APPENDIX_A_FILTERS[::-1]
+        pivots = self.pivots(catalogue_order)
+        problem = self.problem(catalogue_order, APPENDIX_A_FILTERS)
+        observed = problem.datasets["phot"].observed
+        # The step's order and wavelengths are adopted; the pivots are not them.
+        assert list(observed.filters) == APPENDIX_A_FILTERS
+        assert not np.allclose(observed.spectral_axis.values, pivots[::-1], rtol=1e-12, atol=0)
+        np.testing.assert_allclose(observed.spectral_axis.values, pivots[::-1], rtol=1e-2)
+        values = {"model.temperature": 180.0, "model.beta": 1.6, "model.scale": 5.0}
+        assert math.isfinite(problem.evaluate(values).log_prob)
+        run = EmceeEngine(problem, walkers=8).run(10)
+        assert run.posterior["model.temperature"].size == 8 * 10
+
+    def test_an_observed_filter_the_step_does_not_tabulate_is_refused_by_name(self) -> None:
+        with pytest.raises(LikelihoodError, match=r"\['SPITZER_MIPS_70'\] are not tabulated"):
+            self.problem(APPENDIX_A_FILTERS[:7], APPENDIX_A_FILTERS[:6])
+
+    def test_a_step_filter_without_an_observation_is_refused_by_name(self) -> None:
+        with pytest.raises(LikelihoodError, match=r"\['HERSCHEL_PACS_160'\] have no observation"):
+            self.problem(APPENDIX_A_FILTERS[:8], APPENDIX_A_FILTERS)
+
+    def test_a_reordering_under_censoring_is_refused(self) -> None:
+        from ampere.backends.reference import SyntheticPhotometry
+        from ampere.core.likelihood import align_by_filter
+
+        step = SyntheticPhotometry.from_library(APPENDIX_A_FILTERS[:3], self.GRID)
+        predicted = step(Spectrum(self.GRID * u.um, np.ones(self.GRID.size) * u.Jy), None)
+        observed = PhotometricPoints(
+            APPENDIX_A_FILTERS[2::-1], [4.0, 3.0, 2.0] * u.um, [1.0, 1.0, 1.0] * u.Jy
+        )
+        with pytest.raises(LikelihoodError, match="Censoring"):
+            align_by_filter(predicted, observed, censored=True)
+        aligned = align_by_filter(predicted, observed)
+        assert list(aligned.filters) == APPENDIX_A_FILTERS[:3]
+        assert align_by_filter(predicted, aligned) is aligned
+
+
+class TestPredict:
+    """W7.15: ``FittingProblem.predict`` — the model curve at a point in one call."""
+
+    VALUES: ClassVar[dict[str, float]] = {
+        "model.index": -1.5,
+        "model.norm": 2.0,
+        "calibration": 1.1,
+    }
+
+    def test_the_prediction_per_dataset_is_the_instrument_chain_at_the_point(self) -> None:
+        joint = TestJointTwoDatasetProblem()
+        problem = joint.build()
+        predicted = problem.predict(self.VALUES)
+        assert set(predicted) == {"blue", "red"}
+        for label, grid in (("blue", joint.BLUE), ("red", joint.RED)):
+            expected = 1.1 * 2.0 * grid**-1.5
+            np.testing.assert_allclose(predicted[label].values, expected, rtol=1e-12)
+            assert predicted[label].unit == u.Jy
+            # The same route simulate(observe=False) takes, by construction.
+            simulated = problem.simulate(self.VALUES).predicted[label]
+            np.testing.assert_array_equal(predicted[label].values, simulated.values)
+            # And Dataset.predict on the routed values, through the public surface.
+            dataset = problem.datasets[label]
+            routed = {"instrument.calibrate.scale": 1.1}
+            result = problem.models["model"].evaluate(index=-1.5, norm=2.0)
+            np.testing.assert_allclose(
+                dataset.predict(result, routed).values, predicted[label].values, rtol=1e-12
+            )
+
+    def test_a_point_the_prior_rules_out_is_refused_by_name(self) -> None:
+        problem = TestJointTwoDatasetProblem().build()
+        with pytest.raises(DatasetError, match=r"model\.norm=50\.0.*zero prior"):
+            problem.predict({**self.VALUES, "model.norm": 50.0})

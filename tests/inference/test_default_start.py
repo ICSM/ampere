@@ -127,7 +127,14 @@ def size_problem() -> FittingProblem:
 
 # -- the user-journeys memo's Appendix A, copied from its walkthrough ---------
 # (docs/design/walkthroughs/persona_a.py: nine bands, a modified blackbody at
-# T = 180, beta = 1.6, scale = 5, 8 % Gaussian noise, three free parameters)
+# T = 180, beta = 1.6, scale = 5, 8 % Gaussian noise, three free parameters).
+# The memo fitted the pre-W7.15 ModifiedBlackBody, whose scale multiplied the
+# Planck radiance in Jy/sr (fluxes of 1e6-1e15 Jy at scale = 5); that is the
+# solid-angle form since W7.15, so the row keeps the memo's problem bit for bit
+# through solid_angle=. Under the flux form (5 Jy at 100 micron) the prior
+# start alone reaches bulk ESS 108-140 rather than 44, and the margin below
+# measured 3.8 / 2.8 / 4.5 (temperature / beta / scale) -- the flux form
+# itself removes part of what this row pins.
 
 APPENDIX_A_FILTERS = [
     "2MASS_Ks",
@@ -151,7 +158,7 @@ def _appendix_a_model() -> ModifiedBlackBody:
         APPENDIX_A_GRID,
         temperature=st.loguniform(30, 1500),
         beta=st.uniform(0.5, 2.0),
-        scale=st.loguniform(1e-3, 1e3),
+        solid_angle=st.loguniform(1e-3, 1e3),
         reference_wavelength=100.0,
     )
 
