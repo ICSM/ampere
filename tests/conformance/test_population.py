@@ -460,18 +460,28 @@ def path_datasets(
     return models, datasets
 
 
-def spread_members(member: str = "amplitude") -> tuple[list[Parameter], list[Parameter]]:
+def spread_members(
+    member: str = "amplitude", family: str = "lognorm"
+) -> tuple[list[Parameter], list[Parameter]]:
     """``member_i ~ LogNormal(s=spread)``, ``spread ~ HalfNormal``: members, hyperpriors.
 
     The member declares its ``Log`` bijection: ``lognorm`` takes a shape
     argument, so its support cannot be inferred from a hierarchical
     declaration (``parameters.md`` §6, *Amended W5.30*), and the realised rows
-    unconstrain it.
+    unconstrain it. ``family="halfnorm"`` is ``member_i ~ HalfNormal(scale=spread)``
+    instead — positive too, and a location-scale family, which is what the
+    torch realisation lowers a hierarchical prior for (``lowering.md``: its
+    hyperparameters must pass as tensors to keep a gradient; ``lognorm``'s
+    shape argument cannot). The realised row uses it; the numpy rows keep the
+    memo's lognormal.
     """
-    return (
-        [Parameter(member, HierarchicalPrior("lognorm", {"s": "spread"}), bijection=Log())],
-        [Parameter("spread", st.halfnorm(0.0, SPREAD_SCALE))],
-    )
+    if family == "halfnorm":
+        member_parameter = Parameter(member, HierarchicalPrior("halfnorm", {"scale": "spread"}))
+    else:
+        member_parameter = Parameter(
+            member, HierarchicalPrior("lognorm", {"s": "spread"}), bijection=Log()
+        )
+    return ([member_parameter], [Parameter("spread", st.halfnorm(0.0, SPREAD_SCALE))])
 
 
 def path_population(
@@ -480,9 +490,10 @@ def path_population(
     member: str = "amplitude",
     layout: str = "plate",
     over: Sequence[str] | None = None,
+    family: str = "lognorm",
 ) -> Population:
     """The memo's §2.1 population, over ``d*.<within>``."""
-    members, hyperpriors = spread_members(member)
+    members, hyperpriors = spread_members(member, family)
     return Population(
         "gp",
         members=members,
@@ -602,7 +613,10 @@ class TestAPopulationOverADatasetPath:
     def test_the_realised_population_agrees_with_the_numpy_path(
         self, backend: ConformanceBackend, tolerances: Tolerances
     ) -> None:
-        problem = build_path_problem(backend)
+        # A half-normal member: the torch realisation lowers a hierarchical
+        # prior only for the location-scale families (lognorm is refused by
+        # name there), and the claim here is about the path, not the family.
+        problem = build_path_problem(backend, family="halfnorm")
         if problem.backend not in registered_realisations():
             pytest.skip(
                 f"the {problem.backend!r} backend registers no realisation "
