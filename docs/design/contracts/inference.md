@@ -966,7 +966,7 @@ own GP amplitude, and the amplitudes are drawn from one shared prior with a
 fitted spread:
 
 ```pycon
->>> from ampere.core import HierarchicalPrior, Parameter, Population
+>>> from ampere.core import HierarchicalPrior, Log, Parameter, Population
 >>> spaxels = [
 ...     Dataset(observed, Instrument([], channel="blue", input_kind=Spectrum,
 ...                                  label=f"scope{i}"),
@@ -977,7 +977,8 @@ fitted spread:
 ... ]
 >>> plated = DatasetCollection.plate(
 ...     "gp", spaxels, within="likelihood",
-...     members=[Parameter("amplitude", HierarchicalPrior("lognorm", {"s": "spread"}))],
+...     members=[Parameter("amplitude", HierarchicalPrior("lognorm", {"s": "spread"}),
+...                        bijection=Log())],
 ...     hyperpriors=[Parameter("spread", st.halfnorm(0.0, 1.0))],
 ... )
 >>> plated.populations[0].over

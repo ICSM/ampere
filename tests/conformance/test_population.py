@@ -49,6 +49,7 @@ from ampere.core import (
     Derived,
     FittingProblem,
     HierarchicalPrior,
+    Log,
     Parameter,
     ParameterSet,
     Population,
@@ -460,9 +461,15 @@ def path_datasets(
 
 
 def spread_members(member: str = "amplitude") -> tuple[list[Parameter], list[Parameter]]:
-    """``member_i ~ LogNormal(s=spread)``, ``spread ~ HalfNormal``: members, hyperpriors."""
+    """``member_i ~ LogNormal(s=spread)``, ``spread ~ HalfNormal``: members, hyperpriors.
+
+    The member declares its ``Log`` bijection: ``lognorm`` takes a shape
+    argument, so its support cannot be inferred from a hierarchical
+    declaration (``parameters.md`` §6, *Amended W5.30*), and the realised rows
+    unconstrain it.
+    """
     return (
-        [Parameter(member, HierarchicalPrior("lognorm", {"s": "spread"}))],
+        [Parameter(member, HierarchicalPrior("lognorm", {"s": "spread"}), bijection=Log())],
         [Parameter("spread", st.halfnorm(0.0, SPREAD_SCALE))],
     )
 

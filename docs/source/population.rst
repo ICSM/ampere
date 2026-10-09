@@ -281,7 +281,7 @@ two levels down), and :meth:`~ampere.core.DatasetCollection.plate`'s
 
     from ampere.core import (
         DatasetCollection, FittingProblem, GaussianFamily,
-        GaussianProcessNoise, HierarchicalPrior, Likelihood, Matern32,
+        GaussianProcessNoise, HierarchicalPrior, Likelihood, Log, Matern32,
         Parameter,
     )
 
@@ -299,7 +299,9 @@ two levels down), and :meth:`~ampere.core.DatasetCollection.plate`'s
     ]
     collection = DatasetCollection.plate(
         "gp", spectra, within="likelihood",
-        members=[Parameter("amplitude", HierarchicalPrior("lognorm", {"s": "spread"}))],
+        # lognorm takes a shape argument, so the bijection is declared.
+        members=[Parameter("amplitude", HierarchicalPrior("lognorm", {"s": "spread"}),
+                           bijection=Log())],
         hyperpriors=[Parameter("spread", st.halfnorm(0.0, 1.0))],
     )
     problem = FittingProblem(models, collection)
