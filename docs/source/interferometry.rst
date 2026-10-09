@@ -507,6 +507,12 @@ provenance), and §4's composition rebuilt on it is a dozen lines:
 contest's components are uniform discs and ``Binary``'s are Gaussians, so it
 is a smoke test of the plumbing, not a claim about the fit.)
 
+**Porting a published geometry.** ``Binary``'s ``position_angle`` is in
+**radians**, east of north, with the secondary at ``(x, y) = s (sin PA, cos
+PA)`` (``x`` east, ``y`` north) and the phase ``exp(-2 pi i (u x + v y))`` of
+§7, so the contest's 30 degrees enters as ``np.deg2rad(30)``: a bare ``30``
+is 30 radians, 279 degrees, and fits to a different binary altogether.
+
 The reader enforces two conventions, and both are where a silent error would
 otherwise live.
 
@@ -533,7 +539,10 @@ square root. So the container holds ``VIS2DATA`` and ``VIS2ERR`` as given,
 with no unit, and the *prediction* is squared to meet it by
 :class:`~ampere.backends.reference.SquaredAmplitude` — with
 ``normalisation`` set to the model's total flux, held fixed, since a
-normalised visibility carries no information about it. A
+normalised visibility carries no information about it, or, when the total
+flux is a free parameter, ``normalisation="model"``, which divides each
+``|V|**2`` by the model's own zero-spacing value at the cost of the Fourier
+step evaluating twice the samples. A
 :class:`~ampere.core.GaussianFamily` on ``V**2`` is then the standard fit.
 Without ``normalisation`` the step returns ``|V|**2`` in the square of the
 visibility's unit (``Jy**2``), and the alignment check refuses it against an
@@ -541,8 +550,10 @@ visibility's unit (``Jy**2``), and the alignment check refuses it against an
 
 The smaller rules: ``FLAG`` is the mask (OIFITS ``True`` is bad, as ours is),
 non-finite values and non-positive uncertainties are masked too and counted
-in ``meta``; the spectral axis is ``EFF_WAVE`` in micron (the unit every
-shipped ``FourierSample`` emits, which the alignment check compares exactly);
+in ``meta``; the spectral axis is ``EFF_WAVE`` in micron, and a ``FourierSample``
+built with ``from_observed`` emits the observed container's own spectral unit
+(the alignment check compares the unit and the axis values, so a container in
+nanometres meets its prediction in nanometres);
 station, baseline and triangle names, the channel, the MJD and ``EFF_BAND``
 ride in ``extra_coords``; and a file with several targets, instruments or
 arrays is refused until ``target=``, ``insname=`` or ``arrname=`` says which,

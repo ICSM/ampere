@@ -147,6 +147,21 @@ Unreleased
   caveat no longer overdraws the axis label, and a corner plot no longer
   logs "too few points to create valid contours".
 
+* **Interferometry housekeeping (W7.4).** (1)
+  ``SquaredAmplitude(normalisation="model")`` divides each ``|V|**2`` by the
+  model's own zero-spacing value, for a model whose total flux is free; it
+  asks the Fourier step for each sample's ``(0, 0)`` twin (twice the DFT's
+  samples), on all three backends, refuses by name on the analytic route, and
+  leaves the buffer form the default. (2)
+  ``FourierSample.from_observed`` emits the observed container's own spectral
+  unit, so a container in nanometres no longer fails alignment at composition.
+  (3) The conformance protocol's ``InterferometryPieces`` gains
+  ``squared_amplitude`` and the native-piece check reads its names from the
+  protocol. (4) A conformance row fits the shipped ``Binary`` to the 2008
+  contest file and recovers the published geometry; Appendix D's odd optimum
+  was ``position_angle`` entered in degrees where the model takes radians, and
+  :doc:`interferometry` now says so beside the DFT sign.
+
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
 

@@ -802,7 +802,7 @@ class FourierSample(_Step):
             # Mark the expander honoured: a step whose arithmetic needs its
             # expansion (SquaredAmplitude's model form) refuses by name when
             # nothing has expanded for it.
-            setattr(step, "_expanded_by", self)
+            setattr(step, "_expanded_by", self)  # noqa: B010 -- Transformation declares no such slot
         self._expanded = (u_pts.reshape(-1), v_pts.reshape(-1), waves.reshape(-1))
         self._template = None
 

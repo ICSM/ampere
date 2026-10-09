@@ -327,7 +327,7 @@ class TestModelNormalisation:
         )
 
     def test_the_analytic_route_is_refused_by_name(self, backend: ConformanceBackend) -> None:
-        """No ``FourierSample``, nothing to expand: the step says so rather than divide by itself."""
+        """No ``FourierSample``, nothing to expand, so the step refuses."""
         pieces = pieces_or_skip(backend)
         u_pts, v_pts, waves, _ = visibility_coverage()
         model = pieces.binary_visibilities(u_pts, v_pts, waves * u.micron, channels="vis", **BINARY)
@@ -345,7 +345,7 @@ class TestModelNormalisation:
             pieces_or_skip(backend).squared_amplitude(normalisation="mode1")
 
     def test_the_buffer_form_does_not_expand(self, backend: ConformanceBackend) -> None:
-        """Only the model form carries ``expand_uv``: the default and the buffer form stay as they were."""
+        """Only the model form carries ``expand_uv``; the default and the buffer form do not."""
         step = pieces_or_skip(backend).squared_amplitude
         assert getattr(step(), "expand_uv", None) is None
         assert getattr(step(normalisation=1.0), "expand_uv", None) is None
