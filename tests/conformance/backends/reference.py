@@ -63,6 +63,7 @@ from ampere.backends.reference import (
     PowerLaw,
     ReflexOrbit,
     Resample,
+    SquaredAmplitude,
     TimeSmearing,
     UniformDisc,
     UniformDiscVisibilities,
@@ -520,4 +521,5 @@ REFERENCE_INTERFEROMETRY = InterferometryPieces(
     uniform_disc_visibilities=UniformDiscVisibilities,
     gaussian_source_visibilities=GaussianSourceVisibilities,
     binary_visibilities=BinaryVisibilities,
+    squared_amplitude=SquaredAmplitude,
 )

@@ -76,6 +76,7 @@ from ampere.backends.torch import (
     GaussianSource,
     GaussianSourceVisibilities,
     ReflexOrbit,
+    SquaredAmplitude,
     TimeSmearing,
     UniformDisc,
     UniformDiscVisibilities,
@@ -474,6 +475,7 @@ TORCH_INTERFEROMETRY = InterferometryPieces(
     uniform_disc_visibilities=UniformDiscVisibilities,
     gaussian_source_visibilities=GaussianSourceVisibilities,
     binary_visibilities=BinaryVisibilities,
+    squared_amplitude=SquaredAmplitude,
 )
 
 
