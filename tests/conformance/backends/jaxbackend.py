@@ -67,6 +67,7 @@ from ampere.backends.jax import (
     GaussianSource,
     GaussianSourceVisibilities,
     ReflexOrbit,
+    SquaredAmplitude,
     TimeSmearing,
     UniformDisc,
     UniformDiscVisibilities,
@@ -449,6 +450,7 @@ JAX_INTERFEROMETRY = InterferometryPieces(
     uniform_disc_visibilities=UniformDiscVisibilities,
     gaussian_source_visibilities=GaussianSourceVisibilities,
     binary_visibilities=BinaryVisibilities,
+    squared_amplitude=SquaredAmplitude,
 )
 
 

@@ -573,6 +573,11 @@ class InterferometryPieces:
         ``VisibilitySet -> ClosurePhases``, three baselines to one angle.
     ``amplitude``
         ``VisibilitySet -> VisibilitySet``, the modulus.
+    ``squared_amplitude``
+        ``VisibilitySet -> VisibilitySet``, ``|V|**2`` (W7.4: appended to the
+        record, after ``binary_visibilities``, by the W5.9 convention). Its
+        ``normalisation="model"`` form asks ``fourier_sample`` for the
+        zero-spacing twin of every sample.
     ``bandwidth_smearing``, ``time_smearing``
         The two averaging steps, which ask ``fourier_sample`` for the extra
         ``(u, v)`` samples they average over.
@@ -599,6 +604,7 @@ class InterferometryPieces:
     uniform_disc_visibilities: type
     gaussian_source_visibilities: type
     binary_visibilities: type
+    squared_amplitude: type
 
 
 @dataclasses.dataclass(frozen=True)

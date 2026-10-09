@@ -315,19 +315,15 @@ class TestTheDeclarationIsShared:
         assert np.array_equal(grids[0][1], grids[1][1])
 
     def test_every_piece_declares_this_backend(self, kit: Kit) -> None:
-        names = (
-            "FourierSample",
-            "ClosurePhase",
-            "Amplitude",
-            "BandwidthSmearing",
-            "TimeSmearing",
-            "UniformDisc",
-            "GaussianSource",
-            "Binary",
-            "UniformDiscVisibilities",
-            "GaussianSourceVisibilities",
-            "BinaryVisibilities",
+        """Every field of the conformance protocol's record, so a new piece is a new row (W7.4)."""
+        from tests.conformance.backends.reference import REFERENCE_INTERFEROMETRY
+        from tests.conformance.protocol import InterferometryPieces
+
+        names = tuple(
+            getattr(REFERENCE_INTERFEROMETRY, field.name).__name__
+            for field in dataclasses.fields(InterferometryPieces)
         )
+        assert len(names) >= 12
         for name in names:
             piece = getattr(kit.itf, name)
             assert piece.BACKEND == kit.name, name

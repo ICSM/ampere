@@ -62,6 +62,7 @@ from ampere.backends.reference import (
     PSFConvolution,
     ReflexOrbit,
     Resample,
+    SquaredAmplitude,
     TimeSmearing,
     UniformDisc,
     UniformDiscVisibilities,
@@ -135,6 +136,7 @@ __all__ = [
     "MirrorPowerLawModel",
     "MirrorReflexOrbit",
     "MirrorResample",
+    "MirrorSquaredAmplitude",
     "MirrorTimeSmearing",
     "MirrorUniformDisc",
     "MirrorUniformDiscVisibilities",
@@ -268,6 +270,12 @@ class MirrorAmplitude(Amplitude):
     BACKEND: ClassVar[str] = BACKEND
 
 
+class MirrorSquaredAmplitude(SquaredAmplitude):
+    """The squared-modulus step, declared as this backend's (W7.4)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
 class MirrorBandwidthSmearing(BandwidthSmearing):
     """Bandwidth smearing, declared as this backend's (W4.1)."""
 
@@ -328,6 +336,7 @@ MIRROR_INTERFEROMETRY = InterferometryPieces(
     uniform_disc_visibilities=MirrorUniformDiscVisibilities,
     gaussian_source_visibilities=MirrorGaussianSourceVisibilities,
     binary_visibilities=MirrorBinaryVisibilities,
+    squared_amplitude=MirrorSquaredAmplitude,
 )
 
 

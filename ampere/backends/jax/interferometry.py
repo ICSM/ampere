@@ -302,7 +302,7 @@ class FourierSample(_JaxInterferometryStep, _ReferenceFourierSample):
             container, field_of_view=field_of_view, oversampling=oversampling
         )
         u_pts, v_pts, waves = probe.expanded_coverage
-        return cls(
+        step = cls(
             u_pts,
             v_pts,
             waves * SPECTRAL_UNIT,
@@ -311,6 +311,8 @@ class FourierSample(_JaxInterferometryStep, _ReferenceFourierSample):
             label=label,
             **placement,
         )
+        step._emit_unit = probe._emit_unit
+        return step
 
     # -- chain-internal negotiation ------------------------------------------
 
@@ -451,6 +453,10 @@ class SquaredAmplitude(_JaxInterferometryStep, _ReferenceSquaredAmplitude):
     rooted. Written as ``real**2 + imag**2`` rather than ``abs(V)**2``, so the
     gradient is defined at the origin too: a squared visibility near a null is
     exactly where a fit to ``V**2`` spends its time.
+
+    ``normalisation="model"`` (W7.4) reduces the expanded flat array the
+    Fourier step hands over: each sample's ``|V|**2`` over its zero-spacing
+    twin's. The expansion is the reference class's, unchanged.
     """
 
     def apply_flux(self, flux: jax.Array, grid: Any, values: Any) -> tuple[jax.Array, Any]:
@@ -460,6 +466,15 @@ class SquaredAmplitude(_JaxInterferometryStep, _ReferenceSquaredAmplitude):
         which is the unit ``normalisation`` was converted to at construction.
         """
         squared = self._square(flux)
+        if self._mode == "model":
+            self._require_expansion()
+            trailing = int(self._trailing)
+            lead = tuple(squared.shape[:-1])
+            shaped = squared.reshape(*lead, -1, 2, trailing)
+            ratio = shaped[..., 0, :] / shaped[..., 1, :]
+            n_out = int(squared.shape[-1]) // 2
+            coverage = tuple(axis.reshape(-1, 2, trailing)[:, 0, :].reshape(n_out) for axis in grid)
+            return ratio.reshape(*lead, n_out), coverage
         if self._normalisation is not None:
             squared = squared / (self._normalisation * self._normalisation)
         return squared, grid
@@ -472,6 +487,8 @@ class SquaredAmplitude(_JaxInterferometryStep, _ReferenceSquaredAmplitude):
 
     def apply(self, samples: Any, values: Any) -> VisibilitySet:
         squared = np.asarray(self._square(self._observed_array(samples.values)))
+        if self._mode == "model":
+            return self._reduce_model(samples, squared)
         return self._finish(samples, squared * self._scale(samples.unit))
 
 
@@ -528,7 +545,7 @@ class _JaxAveragingStep(_JaxInterferometryStep):
         return VisibilitySet(
             np.asarray(reduced[0]),
             np.asarray(reduced[1]),
-            np.asarray(reduced[2]) * SPECTRAL_UNIT,
+            np.asarray(reduced[2]) * (samples.spectral_axis.unit or SPECTRAL_UNIT),
             np.asarray(averaged),
             unit=samples.unit,
             mask=mask,
