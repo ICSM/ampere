@@ -514,7 +514,7 @@ class TestTheStartInProvenance:
         assert run.attrs["ampere_start_route"] == "scipy"
         assert json.loads(run.attrs["ampere_start"]) == conjugate_optimum.start_record()
         assert run.attrs["ampere_start_kind"] == "supplied"
-        assert run.attrs["ampere_schema_version"] == 11
+        assert run.attrs["ampere_schema_version"] == 12
 
     def test_a_prior_started_run_says_prior(self) -> None:
         run = EmceeEngine(agreement_problem(), walkers=8).run(10, initial="prior")
@@ -541,10 +541,10 @@ class TestTheStartInProvenance:
     def test_the_optimum_carries_the_schema_too(self, conjugate_optimum: Optimum) -> None:
         from ampere.results import PROVENANCE_SCHEMA_VERSION
 
-        assert PROVENANCE_SCHEMA_VERSION == 11
-        assert conjugate_optimum.provenance["ampere_schema_version"] == 11
+        assert PROVENANCE_SCHEMA_VERSION == 12
+        assert conjugate_optimum.provenance["ampere_schema_version"] == 12
         tree = conjugate_optimum.to_datatree()
-        assert tree.attrs["ampere_schema_version"] == 11
+        assert tree.attrs["ampere_schema_version"] == 12
         assert "posterior" not in tree.children
 
 

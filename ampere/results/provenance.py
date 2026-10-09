@@ -249,7 +249,20 @@ __all__ = [
 #: the ball on the unsaturated coordinates and prior draws on the saturated
 #: ones -- and ``ampere_start_fallback`` then names those coordinates,
 #: comma-separated; no key changed, so no bump.)*
-PROVENANCE_SCHEMA_VERSION = 11
+#: **12 (W7.1)**: ``ampere_populations`` joined every run -- canonical JSON of
+#: the problem's :class:`~ampere.core.Population` declarations in merge order,
+#: one ``{"name", "label", "layout", "over", "members", "hyperpriors"}`` entry
+#: each (names only: the priors are already in the merged spec), ``"[]"``
+#: when there are none, so the attribute exists on every run from this schema
+#: on. The merged spec already moved with a population, but the declaration
+#: itself was recorded nowhere (W6.11's finding), and since W7.1 a population
+#: may be declared over a dataset's own path (``"d0.likelihood"``), after
+#: which that dataset's own spec no longer declares the leaf the population
+#: replaced. Recorded, not hashed: :func:`problem_fingerprint` already hashes
+#: the merged spec and ``sites``, which move when ``over`` does, and the
+#: schema constant itself, so ``ampere_problem_hash`` moves at this bump as
+#: at every previous one.
+PROVENANCE_SCHEMA_VERSION = 12
 
 #: Every attribute this module writes starts with this, so ampere's provenance
 #: never collides with ArviZ's own (``created_at``, ``creation_library``, ...)
@@ -661,6 +674,28 @@ def problem_fingerprint(problem: FittingProblem) -> dict[str, Any]:
     }
 
 
+def population_records(problem: FittingProblem) -> list[dict[str, Any]]:
+    """The problem's population declarations, names only, in merge order (W7.1).
+
+    One entry per :class:`~ampere.core.Population`: its name, its component
+    label, its layout, its ``over`` entries exactly as declared (qualified
+    paths included) and the bare names of its members and hyperpriors. The
+    priors are not repeated: they are in the merged spec under the
+    population's own component.
+    """
+    return [
+        {
+            "name": population.name,
+            "label": population.component,
+            "layout": population.layout,
+            "over": list(population.over),
+            "members": list(population.member_names),
+            "hyperpriors": list(population.hyperprior_names),
+        }
+        for population in problem.populations
+    ]
+
+
 def spec_hashes(problem: FittingProblem) -> dict[str, Any]:
     """The joint spec hash, and one per top-level merge component.
 
@@ -1001,6 +1036,10 @@ def provenance_attrs(
         # W7.0, schema 10: the derived parameters, whose posterior variables are
         # deterministic functions of the draws rather than sampled dimensions.
         "derived": canonical_json(list(problem.parameters.derived_names)),
+        # W7.1, schema 12: the population declarations, which the merged spec
+        # reflects but nothing else records -- a dataset's own spec no longer
+        # declares a leaf a population over its path replaced.
+        "populations": canonical_json(population_records(problem)),
         # W5.22, schema 8: each free parameter's own declared prior, neutrally
         # described -- what lets a reader (fit_population among them) read
         # pi_0 back off a run rather than take it as a required argument.

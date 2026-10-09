@@ -190,10 +190,11 @@ class TestRoundTrip:
         assert len(stored.attrs[f"{ATTR_PREFIX}data_hash"]) == 32
         # W3.12: ampere_model_hash joined the recipe at schema 6; schema 7
         # (W5.0), schema 8 (W5.22), schema 9 (W6.7, ampere_start_route) and
-        # schema 11 (W7.12, ampere_start_kind) add no root attribute this
-        # function's own recipe touches.
+        # schema 11 (W7.12, ampere_start_kind) and schema 12 (W7.1,
+        # ampere_populations) add no root attribute this function's own
+        # recipe touches.
         assert len(stored.attrs[f"{ATTR_PREFIX}model_hash"]) == 32
-        assert stored.attrs[f"{ATTR_PREFIX}schema_version"] == PROVENANCE_SCHEMA_VERSION == 11
+        assert stored.attrs[f"{ATTR_PREFIX}schema_version"] == PROVENANCE_SCHEMA_VERSION == 12
         assert stored.attrs[f"{ATTR_PREFIX}seed"] == 20260908
         assert stored.attrs[f"{ATTR_PREFIX}training_set_version"] == TRAINING_SET_SCHEMA_VERSION
 
@@ -1018,7 +1019,7 @@ class TestTheDerivedNode:
             problem = build_population_problem(ReferenceBackend(), layout=layout)
             assert not problem.parameters.derived_names
             fingerprint = problem_fingerprint(problem)
-            assert fingerprint.pop("version") == PROVENANCE_SCHEMA_VERSION == 11
+            assert fingerprint.pop("version") == PROVENANCE_SCHEMA_VERSION == 12
             assert hash_of(problem.parameters.to_spec()) == spec_digest, layout
             assert hash_of(fingerprint) == fingerprint_digest, layout
             assert provenance_attrs(problem)[f"{ATTR_PREFIX}derived"] == "[]"

@@ -466,6 +466,44 @@ class TestDatasetCollection:
         assert "blue" in collection
         assert collection["blue"].parameters.free_names == ("instrument.calibrate.scale",)
 
+    def test_plate_within_writes_the_paths_from_the_dataset_labels(self) -> None:
+        """W7.1: ``within=`` is the convenience over a path inside each dataset."""
+        from ampere.core import HierarchicalPrior, Population
+
+        members = [Parameter("scale", HierarchicalPrior("lognorm", {"s": "spread"}))]
+        hyperpriors = [Parameter("spread", st.halfnorm(0.0, 0.5))]
+        datasets = {
+            label: Dataset(flat_spectrum(), Instrument([Calibrate()], label=label))
+            for label in ("blue", "red")
+        }
+        collection = DatasetCollection.plate(
+            "gains",
+            datasets,
+            members=members,
+            hyperpriors=hyperpriors,
+            within="instrument.calibrate",
+        )
+        (population,) = collection.populations
+        assert population == Population(
+            "gains",
+            members=members,
+            hyperpriors=hyperpriors,
+            over=["blue.instrument.calibrate", "red.instrument.calibrate"],
+        )
+        # No model labels were needed, and the population reaches the datasets.
+        problem = FittingProblem({"model": Flat(WAVELENGTH)}, collection)
+        assert problem.parameters["gains.scale"].shape == (2,)
+        assert "blue.instrument.calibrate.scale" not in problem.parameters.names
+        with pytest.raises(DatasetError, match=r"both over=.*and within="):
+            DatasetCollection.plate(
+                "gains",
+                datasets,
+                members=members,
+                hyperpriors=hyperpriors,
+                over=["blue.instrument.calibrate"],
+                within="instrument.calibrate",
+            )
+
     def test_accepts_an_iterable_and_takes_each_datasets_own_label(self) -> None:
         collection = DatasetCollection(
             [
