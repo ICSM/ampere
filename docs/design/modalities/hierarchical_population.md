@@ -699,6 +699,19 @@ is deferred to Phase 5 alongside `Population` itself.
    bindings — provenance, ArviZ labelling, W1.9's lowering — would see an
    incomplete picture. This sketch recommends the amendment; the alternative is
    cheaper today and more expensive later.
+
+   ***Note, W7.1 (2026-10-09).*** The second addressing form landed by the
+   same mechanism, and the ruling stands: a `Population` may be declared over
+   a qualified path inside a dataset (`over=["d0.likelihood", ...]`, or
+   `DatasetCollection.plate(..., within="likelihood")`), so a per-dataset
+   nuisance — the GP amplitude, a calibration scale — is drawn from one shared
+   prior. The one new binding has a longer `local_name`
+   (`"likelihood.amplitude"`), and the dataset's retained mapping takes the
+   second hop it already takes for every other value; neither `distribute` nor
+   either backend changed, the path walk through the retained inner mappings
+   is validation rather than routing, and the bindings view, provenance and
+   the ArviZ plate coordinate (now the dataset labels, as §10.2 asked) see the
+   complete picture. `DatasetCollection` still slices nothing.
 2. **Should `Population` (H-1) land before the freeze or with Phase 5?** It
    changes `merge`'s signature, which argues for the freeze; nothing depends on
    it before Phase 5's hierarchical implementation, which argues against. The

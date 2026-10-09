@@ -1701,3 +1701,174 @@ class TestTheFlatPopulationCapSetting:
                 over=list(components),
                 layout="flat",
             )
+
+
+class TestAPopulationOverAComponentPath:
+    """W7.1: ``Population.over`` entries of the form ``component[.path]``.
+
+    The composites are built here from plain merges, shaped as a dataset is
+    (``likelihood`` a plain set, ``instrument`` a mapping over its steps), so
+    the grammar, the walk and every refusal are pinned without a backend; the
+    conformance battery's ``TestAPopulationOverADatasetPath`` holds the same
+    rules against real datasets on every fixture.
+    """
+
+    @staticmethod
+    def composite(*, shared: bool = False) -> ParameterMapping:
+        label = "gain" if shared else None
+        instrument = ParameterSet.merge(
+            {
+                "calibrate": ParameterSet([Parameter("scale", st.lognorm(0.2), shared_as=label)]),
+                "other": ParameterSet([Parameter("scale", st.lognorm(0.2), shared_as=label)]),
+            }
+        )
+        likelihood = ParameterSet(
+            [Parameter("amplitude", st.lognorm(0.5)), Parameter("length_scale", st.lognorm(1.0))]
+        )
+        return ParameterSet.merge({"instrument": instrument, "likelihood": likelihood})
+
+    @staticmethod
+    def population(over: list[str], member: str = "amplitude", layout: str = "plate") -> Population:
+        return Population(
+            "gp",
+            members=[Parameter(member, HierarchicalPrior("lognorm", {"s": "spread"}))],
+            hyperpriors=[Parameter("spread", st.halfnorm(0.0, 1.0))],
+            over=over,
+            layout=layout,
+        )
+
+    def components(self, count: int = 3, *, shared: bool = False) -> dict[str, ParameterMapping]:
+        return {f"d{index}": self.composite(shared=shared) for index in range(count)}
+
+    @staticmethod
+    def midpoint(mapping: ParameterMapping) -> dict[str, object]:
+        merged = mapping.merged
+        return dict(merged.complete(merged.prior_transform(np.full(merged.free_size, 0.5))))
+
+    def test_the_grammar_admits_a_path_and_refuses_a_malformed_one(self) -> None:
+        population = self.population(["d0.likelihood", "d1.instrument.calibrate"])
+        assert population.over == ("d0.likelihood", "d1.instrument.calibrate")
+        for bad in ("d0..likelihood", "d0.", ".likelihood", "d0.1likelihood"):
+            with pytest.raises(ParameterError, match="valid Python identifier"):
+                self.population([bad])
+        # A member's name stays an identifier: the path lives on the entry.
+        with pytest.raises(ParameterError, match="must not contain"):
+            self.population(["d0.likelihood"], member="likelihood.amplitude")
+
+    def test_a_plate_binding_carries_the_qualified_path(self) -> None:
+        binding = PlateBinding("gp.amplitude", "d0", "likelihood.amplitude", 0)
+        assert binding.local_name == "likelihood.amplitude"
+        with pytest.raises(ParameterError):
+            PlateBinding("gp.amplitude", "d0.likelihood", "amplitude", 0)
+        population = self.population(["d0.likelihood", "d1.likelihood"])
+        assert [(b.component, b.local_name, b.index) for b in population.plate_bindings()] == [
+            ("d0", "likelihood.amplitude", 0),
+            ("d1", "likelihood.amplitude", 1),
+        ]
+
+    def test_the_plate_layout_strips_the_leaf_from_the_outer_declaration(self) -> None:
+        components = self.components()
+        mapping = ParameterSet.merge(
+            components, populations=[self.population([f"{c}.likelihood" for c in components])]
+        )
+        assert mapping.merged["gp.amplitude"].shape == (3,)
+        assert not any(name.endswith("likelihood.amplitude") for name in mapping.merged.names)
+        # The composite's own retained mapping still declares the leaf: the
+        # strip is on the outer copy, so the second hop accepts the element.
+        assert "likelihood.amplitude" in mapping.inner["d0"].merged.names
+        values = self.midpoint(mapping)
+        values["gp.amplitude"] = np.array([0.5, 1.5, 2.5])
+        routed = mapping.distribute(values)  # type: ignore[arg-type]
+        for index, label in enumerate(components):
+            assert routed[label]["likelihood.amplitude"] == pytest.approx(0.5 + index)
+            inner = mapping.inner[label]
+            second = inner.distribute(inner.merged.complete(routed[label]))
+            assert second["likelihood"]["amplitude"] == pytest.approx(0.5 + index)
+        # The bindings view already names the dataset-level leaf path.
+        elements = [b for b in mapping.sites_of("gp.amplitude") if b.index is not None]
+        assert [(b.component, b.local_name, b.index) for b in elements] == [
+            (label, "likelihood.amplitude", index) for index, label in enumerate(components)
+        ]
+
+    def test_a_two_level_path_reaches_a_step(self) -> None:
+        components = self.components(2)
+        mapping = ParameterSet.merge(
+            components,
+            populations=[
+                self.population([f"{c}.instrument.calibrate" for c in components], member="scale")
+            ],
+        )
+        assert "d0.instrument.calibrate.scale" not in mapping.merged.names
+        assert "d0.instrument.other.scale" in mapping.merged.names
+        values = self.midpoint(mapping)
+        values["gp.scale"] = np.array([1.1, 0.9])
+        routed = mapping.distribute(values)  # type: ignore[arg-type]
+        assert routed["d1"]["instrument.calibrate.scale"] == pytest.approx(0.9)
+
+    def test_the_flat_layout_re_priors_the_leaf_in_place(self) -> None:
+        components = self.components(2)
+        mapping = ParameterSet.merge(
+            components,
+            populations=[self.population([f"{c}.likelihood" for c in components], layout="flat")],
+        )
+        assert mapping.merged["d0.likelihood.amplitude"].references == ("gp.spread",)
+        assert "gp.amplitude" not in mapping.merged.names
+
+    def test_refusals_by_name(self) -> None:
+        components = self.components(2)
+
+        def merge(population: Population, ties: tuple[Tie, ...] = ()) -> ParameterMapping:
+            return ParameterSet.merge(components, ties=ties, populations=[population])
+
+        # A composite without a path: W5.12's refusal, naming the remedy.
+        with pytest.raises(ParameterError, match=r"without a path.*over=\['d0.likelihood'"):
+            merge(self.population(["d0", "d1"]))
+        # A segment that does not resolve names the components at that level.
+        with pytest.raises(
+            ParameterError, match=r"no component 'noise'.*\['instrument', 'likelihood'\]"
+        ):
+            merge(self.population(["d0.noise", "d1.noise"]))
+        with pytest.raises(ParameterError, match=r"no component 'calib'.*\['calibrate', 'other'\]"):
+            merge(self.population(["d0.instrument.calib", "d1.instrument.calib"], member="scale"))
+        # A path that ends at a composite, or runs on past a plain set.
+        with pytest.raises(ParameterError, match="itself a composite"):
+            merge(self.population(["d0.instrument", "d1.instrument"], member="scale"))
+        with pytest.raises(ParameterError, match=r"'d0\.likelihood' is a ParameterSet"):
+            merge(self.population(["d0.likelihood.amplitude", "d1.likelihood.amplitude"]))
+        # A path on a plain-set component.
+        plain = {"m0": ParameterSet([Parameter("amplitude", st.lognorm(0.5))])}
+        with pytest.raises(ParameterError, match="'m0' is a ParameterSet, not a composite"):
+            ParameterSet.merge(plain, populations=[self.population(["m0.likelihood"])])
+        # A leaf the composite does not declare.
+        with pytest.raises(ParameterError, match=r"declares no 'likelihood.tilt'.*'amplitude'"):
+            merge(self.population(["d0.likelihood", "d1.likelihood"], member="tilt"))
+        # A tied leaf.
+        with pytest.raises(ParameterError, match=r"d0.likelihood.amplitude.*already shared"):
+            merge(
+                self.population(["d0.likelihood", "d1.likelihood"]),
+                ties=(Tie("amp", ("d0.likelihood.amplitude", "d1.likelihood.amplitude")),),
+            )
+
+    def test_a_leaf_an_inner_shared_as_collapsed_is_refused_by_its_tie_label(self) -> None:
+        components = self.components(2, shared=True)
+        assert "instrument.gain" in components["d0"].merged.names
+        with pytest.raises(ParameterError, match=r"collapsed it into d0.instrument.gain"):
+            ParameterSet.merge(
+                components,
+                populations=[
+                    self.population(
+                        ["d0.instrument.calibrate", "d1.instrument.calibrate"], member="scale"
+                    )
+                ],
+            )
+
+    def test_an_element_binding_cannot_shadow_a_leaf_the_composite_still_declares(self) -> None:
+        """Memo §2.2 rule 5: the shadow check compares the full path."""
+        with pytest.raises(ParameterError, match="shadow"):
+            ParameterSet.merge(
+                {
+                    "d0": self.composite(),
+                    "gp": ParameterSet([Parameter("amplitude", st.lognorm(0.5), shape=(1,))]),
+                },
+                plate_bindings=[PlateBinding("gp.amplitude", "d0", "likelihood.amplitude", 0)],
+            )

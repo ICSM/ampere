@@ -1999,7 +1999,7 @@ class TestSchemaNineAttributes:
     """W6.7: ``ampere_start_route`` on every run, ``ampere_start`` from an Optimum."""
 
     def test_the_schema_version_is_nine(self) -> None:
-        # nine introduced them; W7.0 bumped to ten, W7.12 to eleven
+        # nine introduced them; W7.0 bumped to ten, W7.12 to eleven, W7.1 to twelve
         assert PROVENANCE_SCHEMA_VERSION >= 9
 
     def test_the_default_start_is_the_prior(self) -> None:
@@ -2042,6 +2042,33 @@ class TestSchemaNineAttributes:
             "evaluations": 40,
             "converged": True,
         }
+
+
+class TestSchemaTwelveAttributes:
+    """W7.1: ``ampere_populations`` on every run, the population declarations."""
+
+    def test_the_schema_version_is_twelve(self) -> None:
+        assert PROVENANCE_SCHEMA_VERSION >= 12
+
+    def test_a_problem_without_a_population_records_an_empty_list(self) -> None:
+        assert provenance_attrs(joint_problem())["ampere_populations"] == "[]"
+
+    def test_the_declaration_is_recorded_by_name(self) -> None:
+        from tests.conformance.backends.reference import ReferenceBackend
+        from tests.conformance.test_population import build_population_problem
+
+        problem = build_population_problem(ReferenceBackend(), layout="flat")
+        recorded = json.loads(provenance_attrs(problem)["ampere_populations"])
+        assert recorded == [
+            {
+                "name": "objects",
+                "label": "objects",
+                "layout": "flat",
+                "over": ["obj0", "obj1", "obj2", "obj3"],
+                "members": ["slope"],
+                "hyperpriors": ["mu", "sigma"],
+            }
+        ]
 
 
 class TestEmitSampleStats:

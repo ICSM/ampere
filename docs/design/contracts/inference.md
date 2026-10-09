@@ -959,35 +959,58 @@ takes them beside the ties they are the counterpart of —
 builds one from the datasets' own order, which is the factory limitation 17.6
 named.
 
+*Amended W7.1* — a population may reach the **datasets themselves**, through a
+path inside each (`parameters.md` §9, "`over` entries"). `within=` writes the
+entries from the dataset labels; here each spaxel's flexible likelihood has its
+own GP amplitude, and the amplitudes are drawn from one shared prior with a
+fitted spread:
+
 ```pycon
->>> from ampere.core import HierarchicalPrior, Parameter, Population
+>>> from ampere.core import HierarchicalPrior, Log, Parameter, Population
 >>> spaxels = [
 ...     Dataset(observed, Instrument([], channel="blue", input_kind=Spectrum,
 ...                                  label=f"scope{i}"),
+...             Likelihood(GaussianFamily(), GaussianProcessNoise(
+...                 Matern32(st.loguniform(1e-3, 1e1), st.loguniform(0.1, 10.0)))),
 ...             model=f"spaxel_{i}", label=f"spaxel_{i}")
 ...     for i in range(3)
 ... ]
 >>> plated = DatasetCollection.plate(
-...     "spaxels", spaxels,
-...     members=[Parameter("index",
-...                        HierarchicalPrior("norm", {"loc": "mu", "scale": "sigma"}))],
-...     hyperpriors=[Parameter("mu", st.norm(0.0, 1.0)),
-...                  Parameter("sigma", st.halfnorm(0.0, 1.0))],
+...     "gp", spaxels, within="likelihood",
+...     members=[Parameter("amplitude", HierarchicalPrior("lognorm", {"s": "spread"}),
+...                        bijection=Log())],
+...     hyperpriors=[Parameter("spread", st.halfnorm(0.0, 1.0))],
 ... )
 >>> plated.populations[0].over
-('spaxel_0', 'spaxel_1', 'spaxel_2')
+('spaxel_0.likelihood', 'spaxel_1.likelihood', 'spaxel_2.likelihood')
 >>> plated.populations[0].size
 3
+>>> mapping = ParameterSet.merge(plated.components(), populations=plated.populations)
+>>> [name for name in mapping.merged.names if "amplitude" in name]
+['gp.amplitude']
+>>> [(b.component, b.local_name, b.index) for b in mapping.sites_of("gp.amplitude")
+...  if b.index is not None]
+[('spaxel_0', 'likelihood.amplitude', 0), ('spaxel_1', 'likelihood.amplitude', 1),
+ ('spaxel_2', 'likelihood.amplitude', 2)]
 
 ```
 
-The draws are routed to the **models** the datasets name, not to the datasets
-themselves, and that is a rule rather than a default: a population addresses
-its members by *bare* local name, while a dataset joins the merge as a
-`ParameterMapping` whose names are qualified (`likelihood.scale`), so an
-element routed there would never reach a leaf. The merge refuses it by name.
-A quantity genuinely shared *across* the spaxels' noise models is still a
-`Tie`, as above — sharing and population are alternatives, not layers.
+Each spaxel's own `likelihood.amplitude` is gone from the joint space;
+element *i* of `gp.amplitude` reaches spaxel *i* under that qualified name, and
+the spaxel's retained mapping routes it on to its noise model — the second hop
+every other value already takes, so routing still lives in one place
+(`hierarchical_population.md` §11 Q1). The datasets need no model labels for
+this; `within="instrument.calibrate"` would reach one instrument step instead,
+two levels down. Without `within=` (and without `over=`) the default is still
+each dataset's **model** label, for a population over the models' own
+parameters. The rule the frozen text stated here — that draws are routed to
+the models and never to the datasets — was a rule for want of a path: a bare
+member cannot reach a leaf a dataset qualifies, and a dataset named in `over`
+*without* a path is still refused by name, the refusal naming `within=` as the
+remedy. A quantity genuinely shared *across* the spaxels' noise models is still
+a `Tie`, as above — sharing and population are alternatives per quantity, and a
+population over `d*.likelihood` for `amplitude` coexists with a `Tie` over the
+`length_scale`s.
 
 What this buys over the comprehension is the scaling the paragraph above
 measured: the population's draws are **one** array-valued parameter, one

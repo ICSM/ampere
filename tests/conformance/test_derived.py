@@ -770,9 +770,9 @@ class TestThePosterior:
         from .backends.reference import ReferenceBackend
 
         problem = build_problem(ReferenceBackend(), results_population())
-        assert PROVENANCE_SCHEMA_VERSION == 11
+        assert PROVENANCE_SCHEMA_VERSION == 12
         run = EmceeEngine(problem, walkers=2 * problem.free_size + 2).run(steps=40, burn_in=2)
-        assert run.attrs["ampere_schema_version"] == 11
+        assert run.attrs["ampere_schema_version"] == 12
         derived = json.loads(run.attrs["ampere_derived"])
         assert derived == list(problem.parameters.derived_names)
         assert set(derived) == {"objects.sigma", "objects.slope", "objects.tilt"}

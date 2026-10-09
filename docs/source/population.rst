@@ -264,6 +264,69 @@ to intervals consistent with a fifty-object reduction of the same draw, and
 is where to look for the calibrated behaviour this page's toy only
 gestures at.
 
+A population of nuisance parameters: one prior over each dataset's GP amplitude
+-------------------------------------------------------------------------------------
+
+Everything above draws a **model** parameter from the population. Since
+**W7.1** a population can equally reach a parameter that lives *inside a
+dataset* — the flexible likelihood's GP amplitude, or one instrument step's
+calibration scale — so a per-dataset nuisance is drawn from one shared prior
+whose spread is fitted, rather than N independent priors or one tied value.
+An ``over`` entry is then a qualified path, the dataset's label followed by
+the component inside it (``"d0.likelihood"``; ``"d0.instrument.calibrate"``,
+two levels down), and :meth:`~ampere.core.DatasetCollection.plate`'s
+``within=`` writes those entries from the dataset labels:
+
+.. code-block:: python
+
+    from ampere.core import (
+        DatasetCollection, FittingProblem, GaussianFamily,
+        GaussianProcessNoise, HierarchicalPrior, Likelihood, Log, Matern32,
+        Parameter,
+    )
+
+    # One flexible likelihood per spectrum: each declares its own
+    # likelihood.amplitude and likelihood.length_scale.
+    spectra = [
+        Dataset(
+            observed[i],
+            Instrument([], label=f"spec{i}"),
+            Likelihood(GaussianFamily(), GaussianProcessNoise(
+                Matern32(st.loguniform(1e-3, 1e1), st.loguniform(0.1, 10.0)))),
+            model=f"obj{i}", label=f"spec{i}",
+        )
+        for i in range(n_spectra)
+    ]
+    collection = DatasetCollection.plate(
+        "gp", spectra, within="likelihood",
+        # lognorm takes a shape argument, so the bijection is declared.
+        members=[Parameter("amplitude", HierarchicalPrior("lognorm", {"s": "spread"}),
+                           bijection=Log())],
+        hyperpriors=[Parameter("spread", st.halfnorm(0.0, 1.0))],
+    )
+    problem = FittingProblem(models, collection)
+
+    collection.populations[0].over   # ('spec0.likelihood', 'spec1.likelihood', ...)
+    problem.parameters["gp.amplitude"].shape   # (n_spectra,)
+
+Each spectrum's own ``likelihood.amplitude`` leaves the joint space and
+element *i* of ``gp.amplitude`` reaches spectrum *i*'s noise model; the
+length scales stay per-spectrum (or can be tied — a population and a
+:class:`~ampere.core.Tie` are alternatives per quantity, not per dataset).
+Because the population's components *are* the datasets, an emitted run's
+``gp`` dimension is labelled by the dataset labels, and the declaration
+itself is recorded in the run's provenance as ``ampere_populations``
+(schema 12). The non-centred form for NUTS is the same declaration with an
+internal ``z`` and a derived member,
+``Parameter("amplitude", Derived("exp(mu + sigma * z)"))``, exactly as for a
+model parameter.
+
+The rules are the bare form's, applied to the leaf: it must exist in every
+dataset named, must not be fixed, tied or ``shared_as``, and must agree in
+shape and unit. A dataset named *without* a path is refused, the message
+naming ``within=`` as the remedy, and a path that does not resolve is refused
+naming the components available at that level.
+
 Simulation-based calibration on a population
 -------------------------------------------------
 

@@ -1818,6 +1818,7 @@ class DatasetCollection(Mapping[str, Dataset]):
         members: Sequence[Parameter] = (),
         hyperpriors: Sequence[Parameter] = (),
         over: Sequence[str] | None = None,
+        within: str | None = None,
         layout: str = "plate",
         label: str | None = None,
         **kwargs: Any,
@@ -1847,13 +1848,39 @@ class DatasetCollection(Mapping[str, Dataset]):
             addresses its members by *bare* local name while a dataset's own
             parameters are qualified (``"likelihood.scale"``) — see the
             refusal in :meth:`~ampere.core.parameter.ParameterSet.merge`.
-            Every dataset must then name a distinct model.
+            Every dataset must then name a distinct model. An entry may be a
+            qualified component path (**W7.1**), ``"d0.likelihood"``, which
+            *within* writes for you.
+        within
+            A path inside **each dataset** (**W7.1**) — ``"likelihood"`` for
+            the flexible likelihood's own parameters (a per-dataset GP
+            amplitude under one shared prior), ``"instrument.calibrate"`` for
+            one instrument step's (a per-dataset calibration scale under a
+            fitted spread). The population's ``over`` entries are then
+            ``f"{dataset_label}.{within}"``, in the collection's order (the
+            plate order), so the members reach the datasets themselves and no
+            model labels are needed. Refused together with *over*: the two
+            are alternative ways of writing the same entries.
         **kwargs
             The constructor's other arguments (``joint``, ``shared``,
             ``shared_label``).
         """
+        if within is not None and over is not None:
+            raise DatasetError(
+                f"DatasetCollection.plate({name!r}, ...) was given both over={list(over)!r} "
+                f"and within={within!r}. within= writes the over entries from the dataset "
+                f"labels (f'{{dataset}}.{within}'); pass one or the other."
+            )
         collection = cls(datasets, **kwargs)
-        if over is None:
+        if within is not None:
+            if not isinstance(within, str) or not within:
+                raise DatasetError(
+                    f"DatasetCollection.plate({name!r}, ...): within= must be a non-empty path "
+                    f"inside each dataset ('likelihood', 'instrument.calibrate'), got "
+                    f"{within!r}."
+                )
+            over = [f"{dataset_label}.{within}" for dataset_label in collection]
+        elif over is None:
             labels = collection.model_labels()
             if any(model_label is None for model_label in labels):
                 unnamed = [

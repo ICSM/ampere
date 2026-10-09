@@ -167,7 +167,7 @@ start the optimiser can score falls back to the whole prior, with a
     >>> start = optimise(gp_problem, method="scipy", starts=2)
     >>> run = EmceeEngine(gp_problem, walkers=12).run(50, initial=start)
     >>> run.attrs["ampere_start_route"], run.attrs["ampere_schema_version"]
-    ('scipy', 11)
+    ('scipy', 12)
 
 What an Optimum records, and saving it
 --------------------------------------
