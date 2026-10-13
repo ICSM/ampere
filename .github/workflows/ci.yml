@@ -164,7 +164,7 @@ jobs:
     # that DO gate the slower jobs below.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
         with:
           environments: dev
           cache: true
@@ -223,7 +223,7 @@ jobs:
     # instead of on the next real PR.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
         with:
           environments: dev
           cache: true
@@ -242,7 +242,7 @@ jobs:
         run: echo "skipped -- see the path-filter table in this workflow's header comment and .github/scripts/path_filters.py"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: needs.changes.outputs.run_dev == 'true'
-      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
         if: needs.changes.outputs.run_dev == 'true'
         with:
           environments: dev
@@ -289,7 +289,7 @@ jobs:
         run: echo "skipped -- see the path-filter table in this workflow's header comment and .github/scripts/path_filters.py"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: needs.changes.outputs.run_dev == 'true'
-      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
         if: needs.changes.outputs.run_dev == 'true'
         with:
           environments: test-py${{ matrix.python }}
@@ -402,7 +402,7 @@ jobs:
         run: echo "skipped -- see the path-filter table in this workflow's header comment and .github/scripts/path_filters.py"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: needs.changes.outputs.run_dev == 'true'
-      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
         if: needs.changes.outputs.run_dev == 'true'
         with:
           environments: dev
@@ -471,7 +471,7 @@ jobs:
         run: echo "skipped -- see the path-filter table in this workflow's header comment and .github/scripts/path_filters.py"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: steps.gate.outputs.run == 'true'
-      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
         if: steps.gate.outputs.run == 'true'
         with:
           environments: ${{ matrix.environment }}
@@ -570,7 +570,7 @@ jobs:
         run: echo "skipped -- see the path-filter table in this workflow's header comment and .github/scripts/path_filters.py"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: steps.gate.outputs.run == 'true'
-      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
         if: steps.gate.outputs.run == 'true'
         with:
           environments: ${{ matrix.environment }}
@@ -629,7 +629,7 @@ jobs:
         run: echo "skipped -- see the path-filter table in this workflow's header comment and .github/scripts/path_filters.py"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: needs.changes.outputs.run_docs == 'true'
-      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
         if: needs.changes.outputs.run_docs == 'true'
         with:
           environments: dev
@@ -713,7 +713,7 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
         with:
           environments: sbi
           cache: true
