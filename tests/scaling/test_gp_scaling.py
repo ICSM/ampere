@@ -196,13 +196,31 @@ def _jax_pieces() -> tuple[Any, Any, Any, Any]:
     return jax, JaxMatern32, JaxDenseGP, JaxQuasisepGP
 
 
-def measure_jax(solver: Any, kernel: Any, sizes: tuple[int, ...], repeats: int) -> dict[int, float]:
+def measure_jax(
+    solver: Any,
+    kernel: Any,
+    sizes: tuple[int, ...],
+    repeats: int,
+    compile_seconds: dict[int, float] | None = None,
+    values_at: dict[int, float] | None = None,
+) -> dict[int, float]:
     """Wall-clock seconds per size for the **jitted, differentiated** density.
 
     Deliberately the value *and* gradient, not the value alone: this backend
     exists to feed a gradient-based sampler, so the number that matters is
     what one NUTS leapfrog step costs. Compilation is excluded — it is paid
-    once per shape, and a sampler pays it once per run.
+    once per shape, and a sampler pays it once per run — but recorded per
+    size into *compile_seconds* when one is given (W7.10: a ``lax.scan``'s XLA
+    compile is not free at 10⁶), and the value into *values_at*.
+
+    **Both hyperparameters are traced** (W7.10's review), as a sampler traces
+    them. Differentiating the amplitude alone, with the length scale a
+    compile-time constant, is a different programme to XLA, and for the
+    ``lax.scan`` provider a far slower one — ``performance_memo.md`` §9's
+    second table: 13 µs per point at 10⁴ and 120 at 10⁵ against 2.3 at
+    every size with the length scale traced. celerite2's custom calls are
+    opaque to XLA and do not care. A row that fixed the length scale would
+    measure that pathology, not the solver.
     """
     import jax
 
@@ -213,7 +231,7 @@ def measure_jax(solver: Any, kernel: Any, sizes: tuple[int, ...], repeats: int) 
         flat = np.ascontiguousarray(coordinates[:, 0])
 
         def density(
-            amplitude: Any,
+            hyperparameters: Any,
             coordinates: np.ndarray = flat,
             residual: np.ndarray = residual,
             variance: np.ndarray = variance,
@@ -223,13 +241,18 @@ def measure_jax(solver: Any, kernel: Any, sizes: tuple[int, ...], repeats: int) 
                 coordinates,
                 residual,
                 variance,
-                {**values, "amplitude": amplitude},
+                {**values, "amplitude": hyperparameters[0], "length_scale": hyperparameters[1]},
             )
 
         compiled = jax.jit(jax.value_and_grad(density))
-        amplitude = jax.numpy.asarray(AMPLITUDE)
+        amplitude = jax.numpy.asarray([AMPLITUDE, LENGTH_SCALE])
+        started = time.perf_counter()
         value, _ = compiled(amplitude)  # compile, and check the answer is real
         jax.block_until_ready(value)
+        if compile_seconds is not None:
+            compile_seconds[n] = time.perf_counter() - started
+        if values_at is not None:
+            values_at[n] = float(value)
         assert math.isfinite(float(value)), f"{solver.NAME} returned {value!r} at n={n}"
 
         best = math.inf
@@ -262,6 +285,116 @@ def test_the_jax_quasiseparable_solver_scales_linearly(
     assert exponent < 1.5, f"jax QuasisepGP scaled as N**{exponent:.2f}, which is not linear"
     largest = max(DENSE_SIZES)
     assert dense[largest] / quasisep[largest] > 10.0
+
+
+def test_the_jax_scan_provider_scales_linearly(capsys: pytest.CaptureFixture[str]) -> None:
+    """W7.10: the ``lax.scan`` provider against celerite2, both on the CPU, measured.
+
+    The row above's warning, met: tinygp's scan recursions were "quadratic in
+    practice" on XLA's CPU backend, and the scan provider was too until its
+    loop was unrolled by two (``ampere.backends.jax._quasisep._UNROLL``;
+    ``performance_memo.md`` §9 has the diagnosis). Printed per size: the
+    jitted value and gradient of each provider, best of five, compilation
+    excluded, and each one's compile time as its own column. The assertions
+    are what was measured with margin — the scan is linear, and it computes
+    celerite2's number — not a speed ratio, which is the memo's to record.
+    The 10⁶-point row lives in the memo's harness, not here: its peak memory
+    needs a process of its own. Both hyperparameters are traced
+    (:func:`measure_jax`): with the length scale a constant this row measured
+    N**1.85 and failed — the memo's second table, jax's reverse mode through a
+    scan none of whose decay inputs receives a gradient — which is not the
+    sampler's programme and not what this row asserts on.
+    """
+    _jax, JaxMatern32, _JaxDenseGP, JaxQuasisepGP = _jax_pieces()
+    kernel = JaxMatern32(AMPLITUDE, LENGTH_SCALE)
+    timings: dict[str, dict[int, float]] = {}
+    compiles: dict[str, dict[int, float]] = {}
+    values: dict[str, dict[int, float]] = {}
+    for provider in ("celerite2", "scan"):
+        compiles[provider], values[provider] = {}, {}
+        timings[provider] = measure_jax(
+            JaxQuasisepGP(provider=provider),
+            kernel,
+            QUASISEP_SIZES,
+            repeats=5,
+            compile_seconds=compiles[provider],
+            values_at=values[provider],
+        )
+    with capsys.disabled():
+        print("\njax QuasisepGP providers on the CPU (value and gradient, jitted, best of 5):")
+        print(
+            f"{'N':>8}  {'celerite2 ms':>12}  {'compile s':>9}  {'scan ms':>9}  "
+            f"{'compile s':>9}  {'scan/celerite2':>14}  {'scan us/pt':>10}"
+        )
+        for n in QUASISEP_SIZES:
+            fast, scan = timings["celerite2"][n], timings["scan"][n]
+            print(
+                f"{n:>8}  {fast * 1e3:>12.2f}  {compiles['celerite2'][n]:>9.2f}  "
+                f"{scan * 1e3:>9.2f}  {compiles['scan'][n]:>9.2f}  {scan / fast:>14.1f}  "
+                f"{scan / n * 1e6:>10.2f}"
+            )
+        print(
+            f"fitted slopes: celerite2 N**{slope(timings['celerite2']):.2f}, "
+            f"scan N**{slope(timings['scan']):.2f}"
+        )
+
+    exponent = slope(timings["scan"])
+    assert exponent < 1.3, f"the scan provider scaled as N**{exponent:.2f}, which is not linear"
+    for n in QUASISEP_SIZES:
+        # The two providers sum the same N terms in a different order, and the
+        # difference grows with N: 2e-16 relative at 10³, 2e-11 at 10⁴, 1.4e-9
+        # at 10⁵ (1.3e-8 at 10⁶, the memo's row) — far inside `cross_solver`.
+        assert values["scan"][n] == pytest.approx(values["celerite2"][n], rel=1e-8)
+
+
+def test_the_jax_scan_provider_is_linear_with_the_length_scale_fixed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The amplitude alone differentiated, the length scale a constant: still linear.
+
+    The W7.10 review's finding: jax's reverse mode through the provider's
+    scans was superlinear whenever the decays carried no tangent — 13 µs per
+    point at 10⁴ and 36 at 3e4, N**1.85 to 10⁵ — which an ordinary fit with
+    a fixed length scale would have met. ``_quasisep._with_tangent`` ties the
+    rates to the generators (measured 2.0 and 2.3 µs per point after); this
+    row keeps that tie honest on every jax, at sizes that cost a second.
+    """
+    jax, JaxMatern32, _JaxDenseGP, JaxQuasisepGP = _jax_pieces()
+    kernel = JaxMatern32(AMPLITUDE, LENGTH_SCALE)
+    values = kernel.resolve(None)
+    solver = JaxQuasisepGP(provider="scan")
+    sizes = (3_000, 10_000, 30_000)
+    timings: dict[int, float] = {}
+    for n in sizes:
+        coordinates, residual, variance = problem(n)
+        flat = np.ascontiguousarray(coordinates[:, 0])
+
+        def density(
+            amplitude: Any,
+            coordinates: np.ndarray = flat,
+            residual: np.ndarray = residual,
+            variance: np.ndarray = variance,
+        ) -> Any:
+            return solver.log_marginal_likelihood_jax(
+                kernel, coordinates, residual, variance, {**values, "amplitude": amplitude}
+            )
+
+        compiled = jax.jit(jax.value_and_grad(density))
+        amplitude = jax.numpy.asarray(AMPLITUDE)
+        jax.block_until_ready(compiled(amplitude))
+        best = math.inf
+        for _ in range(5):
+            started = time.perf_counter()
+            jax.block_until_ready(compiled(amplitude))
+            best = min(best, time.perf_counter() - started)
+        timings[n] = best
+    with capsys.disabled():
+        print("\njax scan provider, the amplitude alone differentiated (value+grad, jitted):")
+        for n in sizes:
+            per_point = timings[n] / n * 1e6
+            print(f"{n:>8}  {timings[n] * 1e3:>9.2f} ms  {per_point:>8.2f} us/pt")
+    exponent = slope(timings)
+    assert exponent < 1.3, f"N**{exponent:.2f} with the length scale fixed, which is not linear"
 
 
 def test_the_jax_solvers_agree_at_the_largest_dense_size() -> None:

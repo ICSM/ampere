@@ -702,6 +702,177 @@ for n in ORDER:
 # three failures by name.
 ```
 
+## 9. The jax scan provider on the CPU, measured (W7.10)
+
+*W7.10, 2026-10-14, Opus. The item: "the CPU speed of the scan measured
+against celerite2 at 10³–10⁶ points and recorded in `performance_memo.md`,
+with the device rule chosen from that table".*
+
+**Machine and versions.** §1's machine (Ryzen 9 6900HS, 13 GB, WSL2), the
+`jax` environment from the committed lock: Python 3.13, jax/jaxlib 0.11.1,
+celerite2 0.3.3, CPU only, float64. The timings below were taken at the
+review (2026-10-14) on a shared machine — W7.2's torch review leg at 100 %
+of one core beside the first table, another project's jobs intermittently —
+so absolute numbers carry perhaps 20 % of noise; the ratios between the two
+providers in the same run, and the exponents, are what the memo relies on.
+
+**What is timed.** `tests/scaling/test_gp_scaling.py`'s problem (an
+irregular Matérn-3/2 problem, ten points per length scale, so every N is the
+same physical problem sampled longer): the **jitted value and gradient** of
+`QuasisepGP(provider=...).log_marginal_likelihood_jax` with respect to
+**both hyperparameters** (the amplitude and the length scale — what a
+sampler differentiates; the second table says why that matters), best of
+five, compilation excluded and reported as its own column (the first call's
+wall time). Each (provider, N) ran in its own process through the harness
+`~/.cache/ampere-gates/w7.10/now/memo_harness2.py`, so the peak RSS
+(`ru_maxrss`) is that run's alone; the process's RSS before the first jit —
+the interpreter, jax and ampere imported — is the baseline column. The
+10³–10⁵ rows are also `pixi run -e jax scaling`'s
+`test_the_jax_scan_provider_scales_linearly`, which prints the same table;
+10⁶ lives only in the harness, because its peak memory needs a process of
+its own.
+
+| N | celerite2 (ms) | compile (s) | peak RSS (MB) | scan (ms) | compile (s) | peak RSS (MB) | scan / celerite2 | scan (µs per point) |
+|---|---|---|---|---|---|---|---|---|
+| 10³ | 0.37 | 0.31 | 373 | 2.14 | 1.23 | 420 | 5.8 | 2.14 |
+| 10⁴ | 4.10 | 0.29 | 371 | 24.49 | 1.15 | 430 | 6.0 | 2.45 |
+| 10⁵ | 27.96 | 0.56 | 414 | 241.73 | 1.56 | 522 | 8.6 | 2.42 |
+| 10⁶ | 394.14 | 1.21 | 697 | 2 685.22 | 4.50 | 1 334 | 6.8 | 2.69 |
+
+The baseline RSS was 268–291 MB in every process. The two providers'
+values agree to 2e-16 relative at 10³, 2e-11 at 10⁴, 1.4e-9 at 10⁵ and
+1.3e-8 at 10⁶ — the same N terms summed in a different order, the gap
+growing with N and far inside `tolerances.cross_solver`.
+
+The scaling row's own print, in one process (both providers at each size,
+after the tie):
+
+```
+jax QuasisepGP providers on the CPU (value and gradient, jitted, best of 5):
+       N  celerite2 ms  compile s    scan ms  compile s  scan/celerite2  scan us/pt
+    1000          0.33       0.23       2.35       0.92             7.1        2.35
+    3000          0.73       0.27       5.72       1.00             7.8        1.91
+   10000          2.10       0.21      19.68       0.93             9.4        1.97
+   30000          6.95       0.23      61.54       1.10             8.9        2.05
+  100000         22.54       0.42     220.22       1.35             9.8        2.20
+fitted slopes: celerite2 N**0.93, scan N**1.00
+
+jax scan provider, the amplitude alone differentiated (value+grad, jitted):
+    3000       4.94 ms      1.65 us/pt
+   10000      21.81 ms      2.18 us/pt
+   30000      61.53 ms      2.05 us/pt
+```
+
+**Linear, once unrolled — and once the decays carry a tangent.** The scan is
+linear — 2.1–2.7 µs per point for a value and gradient from 10³ to 10⁶, the
+fitted exponent 1.03 against celerite2's 1.01 — and **5.8–8.6× slower than
+celerite2 at every size**, celerite2 holding 0.3–0.4 µs per point. Two
+things had to be true for that, and the review found the second.
+
+*The unroll.* It was not linear as first written. With
+`lax.scan(..., unroll=1)`, the default, the forward factorisation alone cost
+2.2 µs per point at 10³, 7.9 at 4×10³ and 29.7 at 1.6×10⁴, and a value and
+gradient at 10⁴ did not finish in four minutes: **"quadratic in practice"**,
+exactly W2.5 slice 2's measurement of tinygp. Isolated, the cost belongs to
+the scan's *stacked outputs*, not to its arithmetic: a scan that carries a
+2×2 state and emits nothing costs 6–22 ns a step at every N, while the same
+scan emitting its state per step costs 1.1, 8.7 and 59.6 µs a step at 10³,
+8×10³ and 6.4×10⁴ — linear growth in the per-step cost. Unrolling the loop by
+any factor from two upwards removes the growth (the factorisation's loop
+body: 0.36–0.47 µs a step at 10³ to 5.1×10⁵ with unroll 2; 0.65–0.86 at 8;
+3–6 at 16–64, larger bodies costing more), and two is the fastest, so
+`_quasisep._UNROLL = 2`. The compiled HLO is the same shape at unroll 1 and
+2 — one fused `dynamic-update-slice` per stacked output, no explicit copy
+of the output buffer — so the per-iteration O(N) cost is in how XLA's CPU
+backend executes the one-step loop rather than in anything jax emits; this
+memo records the measurement and the workaround, not a diagnosis of XLA.
+The decision-log row of 2026-09-07 named "an XLA:CPU fix for scan output
+aliasing" as what would change the balance; the unroll is a cheaper route to
+the same place, and it is what a re-measurement should try first on a new
+jax. Re-measured at the review with both hyperparameters traced: `unroll=1`
+costs 52 µs per point at 10⁴ and 134 at 3×10⁴ against 2.5 and 2.1 with two,
+so the finding stands independently of the next one.
+
+*The tangent.* The agent's measurement of the scan was linear; the
+orchestrator's harness, written to differentiate the amplitude alone with
+the length scale a constant (as `tests/scaling`'s rows had always done for
+celerite2), was not — and the branch's new scaling row failed on it at
+N**1.85, 2.68 µs per point at 10³ growing to 120 at 10⁵, 2 217 at 10⁶
+(37 minutes for one value and gradient, after a 41-minute compile). Five
+variants of one standalone loop over the provider's own `factor` and
+`solve_lower`, jitted, best of three (`~/.cache/ampere-gates/w7.10/now/probe_const.py`,
+`probe_f.py`), located it:
+
+| what is differentiated / traced | 10³ (µs per point) | 10⁴ | 3×10⁴ |
+|---|---|---|---|
+| amplitude and length scale (A) | 2.43 | 2.29 | 2.30 |
+| amplitude and length scale, through the solver (E) | 2.56 | 2.32 | 2.43 |
+| amplitude alone, length scale a constant (B) | 2.74 | 12.76 | 35.6 |
+| amplitude alone, coordinates an argument (C) | 2.90 | 11.06 | 38.2 |
+| amplitude alone, through the solver (D, the harness) | 2.93 | 13.22 | 36.1 |
+| amplitude alone, length scale a traced argument (F) | — | 11.73 | 36.9 |
+| amplitude alone, length scale under `stop_gradient` (G) | — | 11.48 | 36.9 |
+
+Linear whenever the length scale is differentiated; superlinear whenever it
+is not, however it is held — so neither XLA constant folding (C, F) nor the
+provider's arithmetic (A) but **jax's reverse mode through a `scan` whose
+per-step decays `p_n` carry no tangent**. This memo records the measurement
+and the workaround, not a diagnosis of jax's partial evaluation. The
+workaround is one line: `_quasisep._with_tangent` adds `0.0 × (a generator's
+first element)` to the rates before the decays are formed, which changes no
+value (XLA does not fold a floating-point `x × 0`; the measurement is the
+proof it survived) and gives the decays a zero tangent whenever the
+generators have one — whenever anything at all is differentiated through
+the operation. With the tie, the amplitude-alone loop costs 2.02 µs per
+point at 10⁴ and 2.27 at 3×10⁴ (`probe_k.py`), and the new scaling row
+`test_the_jax_scan_provider_is_linear_with_the_length_scale_fixed` holds it
+at 3×10³–3×10⁴ on every jax. The case is not exotic: a fit with the length
+scale fixed and the amplitude free is an ordinary fit, and on an accelerator
+the scan is the only provider.
+
+**Memory at 10⁶.** The scan's peak RSS at 10⁶ is 1 334 MB against
+celerite2's 697 and a 291 MB baseline: about 1.04 GB above baseline against
+0.41, or roughly 1 kB per point against celerite2's 0.4 kB. Reverse mode through a `scan` saves the
+carry of every step — a J×J state and a J-vector for the factorisation, a
+J-vector for each substitution — which is O(N J²), and it is the whole of
+the difference; no custom VJP was written (ruling 1: none unless a
+measurement shows the autodiff one is the bottleneck, and the gap is the
+loop's per-step cost, which a custom VJP's own scan would pay again).
+
+**The device rule.** On the CPU celerite2 is the faster at every size
+measured, by 5.8–8.6×, so **`provider="auto"` chooses celerite2 on the
+CPU** and the scan stays available there by name — for batching (it is the
+one quasiseparable route `vmap` can map) and for CI, which runs every
+solver row and the conformance battery on both. **Off the CPU the rule is
+not a speed choice**: celerite2's jax primitives have CPU lowerings alone
+(W6.18), so on an accelerator the scan is the only provider that runs, and
+`"auto"` chooses it. No accelerator number is claimed here: the cluster's
+GPU rows (`tests/gpu`) check agreement and placement, not speed, and a GPU
+column for this table would need `tests/scaling`'s jax rows run in a
+modified `gpu_rows.sbatch`.
+
+**What would change it.** A scan within a factor of about two of celerite2
+on the CPU would make celerite2 optional as a jax dependency (the horizon
+memo's "single point of failure" bullet); at six to nine times it is not,
+and celerite2 stays a base dependency and the CPU default. A fused
+factor-and-solve scan (one pass instead of two for the density) and a
+blocked recursion (several samples per step, the loop count divided) are the
+two levers left untried.
+
+**The benchmark rows (ruling 2).** `pixi run bench`'s eight jax
+quasiseparable rows on snapshots of the tree before (`e4ab6d0`) and after
+the refactor, two rounds, one process per snapshot
+(`~/.cache/ampere-gates/w7.10/bench_driver.py`): the realised-density row
+0.84 → 0.98 ms, the value-and-gradient rows 0.33 → 0.39, 0.79 → 0.90 and
+6.14 → 6.71 ms at 200, 2 000 and 20 000 points (0.82–1.17×, one resolved
+round), the contract-path rows 5.02 → 5.39, 7.97 → 7.21 and 10.69 → 19.68
+ms. That last ratio (1.84×) was re-timed in three further rounds and is
+noise: the contract-path rows swing between 6.7 and 17 ms at 200 points
+across rounds on this shared machine, and the medians of three moved
+1.47 / 1.14 / 0.77× at 200 / 2 000 / 20 000 points. No regression is
+resolved above the noise; the celerite2 provider's values and gradients are
+bit-identical to the wrapper's, which is the property ruling 2 asked for.
+
 ## Appendix A. The harness
 
 The profiling loop, run as `pixi run -e <env> python prof.py <load> <backend>
