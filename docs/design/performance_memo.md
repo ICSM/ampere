@@ -702,6 +702,87 @@ for n in ORDER:
 # three failures by name.
 ```
 
+## 9. The jax scan provider on the CPU, measured (W7.10)
+
+*W7.10, 2026-10-14, Opus. The item: "the CPU speed of the scan measured
+against celerite2 at 10³–10⁶ points and recorded in `performance_memo.md`,
+with the device rule chosen from that table".*
+
+**Machine and versions.** §1's machine (Ryzen 9 6900HS, 13 GB, WSL2), the
+`jax` environment from the committed lock: Python 3.13, jax/jaxlib 0.11.1,
+celerite2 0.3.3, CPU only, float64. Every timing ran under
+`flock /tmp/ampere-gate.lock`; other jobs (another project's, and the
+orchestrator's review legs between holds) shared the machine, never during
+a hold.
+
+**What is timed.** `tests/scaling/test_gp_scaling.py`'s problem (an
+irregular Matérn-3/2 problem, ten points per length scale, so every N is the
+same physical problem sampled longer): the **jitted value and gradient** of
+`QuasisepGP(provider=...).log_marginal_likelihood_jax` with respect to the
+amplitude, best of five, compilation excluded and reported as its own
+column (the first call's wall time). Each (provider, N) ran in its own
+process through the harness `~/.cache/ampere-gates/w7.10/memo_harness.py`,
+so the peak RSS (`ru_maxrss`) is that run's alone; the process's RSS before
+the first jit — the interpreter, jax and ampere imported — is the
+baseline column. The 10³–10⁵ rows are also `pixi run -e jax scaling`'s
+`test_the_jax_scan_provider_scales_linearly`, which prints the same table;
+10⁶ lives only in the harness, because its peak memory needs a process of
+its own.
+
+{TABLE}
+
+{SCALING_TABLE}
+
+**Linear, once unrolled.** The scan is linear — {SCAN_PER_POINT} — and
+{RATIO_TEXT}. It was not linear as first written. With
+`lax.scan(..., unroll=1)`, the default, the forward factorisation alone cost
+2.2 µs per point at 10³, 7.9 at 4×10³ and 29.7 at 1.6×10⁴, and a value and
+gradient at 10⁴ did not finish in four minutes: **"quadratic in practice"**,
+exactly W2.5 slice 2's measurement of tinygp. Isolated, the cost belongs to
+the scan's *stacked outputs*, not to its arithmetic: a scan that carries a
+2×2 state and emits nothing costs 6–22 ns a step at every N, while the same
+scan emitting its state per step costs 1.1, 8.7 and 59.6 µs a step at 10³,
+8×10³ and 6.4×10⁴ — linear growth in the per-step cost. Unrolling the loop by
+any factor from two upwards removes the growth (the factorisation's loop
+body: 0.36–0.47 µs a step at 10³ to 5.1×10⁵ with unroll 2; 0.65–0.86 at 8;
+3–6 at 16–64, larger bodies costing more), and two is the fastest, so
+`_quasisep._UNROLL = 2`. The compiled HLO is the same shape at unroll 1 and
+2 — one fused `dynamic-update-slice` per stacked output, no explicit copy
+of the output buffer — so the per-iteration O(N) cost is in how XLA's CPU
+backend executes the one-step loop rather than in anything jax emits; this
+memo records the measurement and the workaround, not a diagnosis of XLA.
+The decision-log row of 2026-09-07 named "an XLA:CPU fix for scan output
+aliasing" as what would change the balance; the unroll is a cheaper route to
+the same place, and it is what a re-measurement should try first on a new
+jax.
+
+**Memory at 10⁶.** {MEMORY_TEXT} Reverse mode through a `scan` saves the
+carry of every step — a J×J state and a J-vector for the factorisation, a
+J-vector for each substitution — which is O(N J²), and it is the whole of
+the difference; no custom VJP was written (ruling 1: none unless a
+measurement shows the autodiff one is the bottleneck, and the gap is the
+loop's per-step cost, which a custom VJP's own scan would pay again).
+
+**The device rule.** On the CPU celerite2 is the faster at every size
+measured, by {RATIO_RANGE}, so **`provider="auto"` chooses celerite2 on the
+CPU** and the scan stays available there by name — for batching (it is the
+one quasiseparable route `vmap` can map) and for CI, which runs every
+solver row and the conformance battery on both. **Off the CPU the rule is
+not a speed choice**: celerite2's jax primitives have CPU lowerings alone
+(W6.18), so on an accelerator the scan is the only provider that runs, and
+`"auto"` chooses it. No accelerator number is claimed here: the cluster's
+GPU rows (`tests/gpu`) check agreement and placement, not speed, and a GPU
+column for this table would need `tests/scaling`'s jax rows run in a
+modified `gpu_rows.sbatch`.
+
+**What would change it.** A scan within a factor of about two of celerite2
+on the CPU would make celerite2 optional as a jax dependency (the horizon
+memo's "single point of failure" bullet); at {RATIO_SHORT} it is not, and
+celerite2 stays a base dependency and the CPU default. A fused
+factor-and-solve scan (one pass instead of two for the density) and a
+blocked recursion (several samples per step, the loop count divided) are the
+two levers left untried.
+
 ## Appendix A. The harness
 
 The profiling loop, run as `pixi run -e <env> python prof.py <load> <backend>

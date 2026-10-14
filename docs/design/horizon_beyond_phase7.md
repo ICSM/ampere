@@ -370,8 +370,8 @@ optimisers at W6.7. What remains, by value:
 - **conda-forge**: a feedstock for `ampere-astro` is the install route
   most astronomers reach for first; every dependency is on conda-forge
   already. S, after `1.0.0b2`, Peter's maintainership.
-- **The jax quasiseparable solver**: W7.10 lifts the accelerator refusal;
-  `BATCHABLE` for the celerite2 provider stays false until a `vmap` rule
+- **The jax quasiseparable solver**: W7.10 lifted the accelerator
+  refusal (the scan provider); `BATCHABLE` for the celerite2 provider stays false until a `vmap` rule
   exists, and the scan provider gives batching for free — note for W7.10's
   design.
 - **celerite2 as a single point of failure** (plan §6): the scan provider

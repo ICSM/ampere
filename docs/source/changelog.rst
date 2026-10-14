@@ -173,6 +173,18 @@ Unreleased
   run's provenance as ``ampere_populations`` (provenance schema 12). A
   dataset named in ``over`` without a path is still refused, now with this
   form as the remedy. See :doc:`population`.
+* **The jax quasiseparable solver runs on an accelerator.**
+  :class:`ampere.backends.jax.QuasisepGP` gains ``provider=`` — ``"auto"``
+  (the default), ``"celerite2"`` or ``"scan"`` — and a second implementation
+  of its O(N) recursions, written in jax itself as ``lax.scan``, which runs on
+  any device and, unlike celerite2's compiled kernels, can be batched with
+  ``vmap`` (``QuasisepGP(provider="scan").BATCHABLE`` is true, so
+  ``log_prob_unconstrained_batched`` works on a quasiseparable problem). The
+  default chooses by the device you ask for: celerite2 on the CPU, where it is
+  about seven times faster, and the scan anywhere else, so
+  ``QuasisepGP(device="cuda")`` now fits instead of refusing. The run's
+  provenance records which one computed the numbers (``library`` and
+  ``provider`` in the solver's configuration); the answers agree to rounding.
 
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
