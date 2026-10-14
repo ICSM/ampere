@@ -549,7 +549,7 @@ test-m2 = "pytest tests/m2"
 # one BLAS thread per process stops four workers oversubscribing the cores.
 # Measured (dev, 2026-10-02): 36 min 19 s serial -> 19 min 40 s, counts
 # identical (3290 passed / 645 skipped). `-n 0` restores a serial run.
-test-all = { cmd = "pytest -n 4 --dist loadgroup tests/core tests/results tests/conformance tests/backends tests/inference tests/examples tests/m2 tests/interferometry tests/astrometry", env = { OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1", MKL_NUM_THREADS = "1" } }
+test-all = { cmd = "pytest -n 4 --dist loadgroup tests/core tests/results tests/conformance tests/backends tests/inference tests/examples tests/m2 tests/interferometry tests/astrometry tests/spectroscopy", env = { OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1", MKL_NUM_THREADS = "1" } }
 # W5.18: the local pre-commit run -- docs/orchestration.md's "Make a fast
 # gate" rule. The contract-and-backend tier of `test-all` above: `tests/core`,
 # `tests/results`, `tests/conformance`, `tests/backends`, `tests/inference`
@@ -617,7 +617,7 @@ test-all = { cmd = "pytest -n 4 --dist loadgroup tests/core tests/results tests/
 # way, since that class already skipped there for want of the `sbi` extra.
 # W6.10: `-n 4` as for `test-all` above. Measured (dev, 2026-10-02): 4 min
 # 54 s serial (`-n 0`) -> 2 min 32 s, 2951 passed / 444 skipped both ways.
-test-fast = { cmd = "pytest -n 4 --dist loadgroup tests/core tests/results tests/conformance tests/backends tests/inference tests/m2 -m \"not study and not sbi_training and not heavy\" --deselect=tests/results/test_plots.py::TestCornerPaging --deselect=tests/results/test_calibration.py::TestTheRefitLoop", env = { OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1", MKL_NUM_THREADS = "1" } }
+test-fast = { cmd = "pytest -n 4 --dist loadgroup tests/core tests/results tests/conformance tests/backends tests/inference tests/m2 tests/spectroscopy -m \"not study and not sbi_training and not heavy\" --deselect=tests/results/test_plots.py::TestCornerPaging --deselect=tests/results/test_calibration.py::TestTheRefitLoop", env = { OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1", MKL_NUM_THREADS = "1" } }
 # W5.26 (3): `ci.yml`'s `suites` (dev) and `backend-suites`
 # (torch/jax/sbi/nested) jobs run these three groups as separate matrix
 # cells instead of `test-all` as one forty-minute step, so a red row in one
@@ -650,7 +650,11 @@ test-fast = { cmd = "pytest -n 4 --dist loadgroup tests/core tests/results tests
 # single-process gate a developer runs; the three tasks below exist for CI's
 # matrix and are equally valid to run locally when only one group's result
 # is wanted.
-test-group-core = "pytest tests/core tests/results tests/conformance"
+# W7.3 (at review): tests/spectroscopy -- the JWST reader and the spectroscopy
+# front door, 24 reference-only rows under ten seconds -- joins test-all,
+# test-fast and this group, so that CI's dev `core` cell runs it; the item
+# landed it in no task (the W5.26 finding, again).
+test-group-core = "pytest tests/core tests/results tests/conformance tests/spectroscopy"
 test-group-backends = "pytest tests/conformance tests/backends tests/inference tests/examples"
 test-group-studies = "pytest tests/conformance tests/m2 tests/interferometry tests/astrometry"
 # W2.5/W2.4 slice 3: the GPU smoke tests. Skipped wherever `jax.devices()`
@@ -690,7 +694,7 @@ format-check = "ruff format --check . --exclude tests/characterisation"
 # `pixi run -e torch typecheck` / `pixi run -e jax typecheck`. (W2.4 had used
 # `--ignore-missing-imports` per library for the same purpose; the exclude form
 # needs no per-library list and was kept at the merge.)
-typecheck = "bash -c 'dirs=\"\"; excludes=\"\"; for d in ampere/core ampere/backends ampere/inference ampere/results ampere/interferometry; do [ -d \"$d\" ] && dirs=\"$dirs $d\"; done; for b in torch jax; do if [ -d \"ampere/backends/$b\" ] && ! python -c \"import $b\" >/dev/null 2>&1; then echo \"typecheck: skipping ampere/backends/$b -- $b is not installed here; run pixi run -e $b typecheck\"; excludes=\"$excludes --project-excludes=ampere/backends/$b/**\"; fi; done; if [ -z \"$dirs\" ]; then echo \"typecheck: none of ampere/{core,backends,inference,results} exist yet -- nothing to check\"; else pyrefly check $excludes $dirs; fi'"
+typecheck = "bash -c 'dirs=\"\"; excludes=\"\"; for d in ampere/core ampere/backends ampere/inference ampere/results ampere/interferometry ampere/spectroscopy; do [ -d \"$d\" ] && dirs=\"$dirs $d\"; done; for b in torch jax; do if [ -d \"ampere/backends/$b\" ] && ! python -c \"import $b\" >/dev/null 2>&1; then echo \"typecheck: skipping ampere/backends/$b -- $b is not installed here; run pixi run -e $b typecheck\"; excludes=\"$excludes --project-excludes=ampere/backends/$b/**\"; fi; done; if [ -z \"$dirs\" ]; then echo \"typecheck: none of ampere/{core,backends,inference,results} exist yet -- nothing to check\"; else pyrefly check $excludes $dirs; fi'"
 docs = "sphinx-build -W --keep-going -b html docs/source docs/_build/html"
 # W6.5: the release build. `build-dist` writes the sdist and the wheel to
 # `dist/` (cleared first, so `check-dist` never sees a stale file);

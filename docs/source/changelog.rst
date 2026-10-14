@@ -173,6 +173,14 @@ Unreleased
   run's provenance as ``ampere_populations`` (provenance schema 12). A
   dataset named in ``over`` without a path is still refused, now with this
   form as the remedy. See :doc:`population`.
+* **Read JWST spectra.** :func:`ampere.spectroscopy.read_jwst` turns a JWST
+  pipeline ``x1d`` or ``c1d`` product into a :class:`~ampere.core.Spectrum` —
+  the axis in micron, the flux in the file's own unit, the pipeline's
+  ``DO_NOT_USE`` bit as the mask, the instrument, exposure and pipeline
+  version in ``meta`` — and refuses a file holding several spectra unless
+  ``source=`` or ``extension=`` says which. The new :mod:`ampere.spectroscopy`
+  is the one place to import spectra, photometry and their instrument steps
+  from. See :ref:`photometry-spectra-jwst`.
 
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
