@@ -181,6 +181,17 @@ Unreleased
   ``source=`` or ``extension=`` says which. The new :mod:`ampere.spectroscopy`
   is the one place to import spectra, photometry and their instrument steps
   from. See :ref:`photometry-spectra-jwst`.
+* **Fit a table of emission-line fluxes.** :class:`~ampere.core.LineFluxes`
+  holds one integrated flux per transition (a label, a rest wavelength, a
+  flux in W m⁻² — a table in erg s⁻¹ cm⁻² converts with ``.to_unit``), and
+  ``LineIntegration`` (reference, torch and jax) integrates a model spectrum
+  in Jy over a window around each line, in km/s or µm, optionally subtracting
+  a linear continuum through the window's edges, so a model is compared with
+  a line list rather than a spectrum. An observed table aligns with the
+  chain's lines by transition label in any order, as photometry aligns by
+  filter name, and the flexible likelihood's kernel runs over rest
+  wavelength, where a misspecified excitation ladder shows as a correlated
+  residual. See :doc:`line_fluxes`.
 
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------

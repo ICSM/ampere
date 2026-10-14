@@ -115,6 +115,7 @@ from ampere.core.results_schema import (
     Cube,
     FunctionSamples,
     Image,
+    LineFluxes,
     ModelResult,
     PhotometricPoints,
     Spectrum,
@@ -205,6 +206,7 @@ for _kind in (
     Cube,
     VisibilitySet,
     ClosurePhases,
+    LineFluxes,  # W7.9
 ):
     register_kind(_kind)
 del _kind

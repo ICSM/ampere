@@ -13,6 +13,7 @@ Ampere v2
    interferometry
    astrometry
    image
+   line_fluxes
    wstat_comparison
    sbi
    population
@@ -69,7 +70,12 @@ and the first whose observed container is **gridded** — a PSF convolution on
 an ``Image``, the mask rule rewritten for a grid, and the
 ``DenseGP``-against-Hilbert-space-GP benchmark Phase 5's "chosen by
 measurement" rule asks for; its closing section is about what a ``Layout``
-other than ``POINTS`` changes. :doc:`wstat_comparison`
+other than ``POINTS`` changes. :doc:`line_fluxes` is the fourth, and the
+one a spectroscopist most often needs: a table of integrated emission-line
+fluxes — a planetary nebula's mid-infrared lines — fitted through a
+line-integration step, aligned with the model's lines by transition label,
+with the flexible likelihood's kernel over rest wavelength catching a
+misspecified excitation ladder. :doc:`wstat_comparison`
 works through registering a **user-defined likelihood family** — a profiled
 Cash statistic with background — which is the extension point to reach for
 when your data are not Gaussian. :doc:`sbi` is for the opposite case — a
@@ -89,10 +95,11 @@ distributions — your own class, scipy's newer distribution objects, and an
 empirical prior built from a previous run's draws. Every example on both pages is
 run by the documentation's doctest runner.
 
-The first seven have runnable counterparts in the repository:
+The first eight have runnable counterparts in the repository:
 ``examples/sed_composition``, ``examples/m2_misspecification``,
 ``examples/interferometry``, ``examples/astrometry``, ``examples/image``,
-``examples/wstat_comparison.py`` and ``examples/sbi/``, each covered by its
+``examples/line_fluxes``, ``examples/wstat_comparison.py`` and
+``examples/sbi/``, each covered by its
 own test suite so that none can rot unnoticed. The v2 twins of six classic
 legacy examples are listed in ``examples/README.md`` and set beside their
 legacy originals, with snippets, in :ref:`the migration guide

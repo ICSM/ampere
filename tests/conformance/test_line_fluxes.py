@@ -571,3 +571,25 @@ class TestTheRealisation:
             native = float(np.asarray(backend.to_numpy(realised.log_prob_unconstrained(y))))
             contract = float(problem.log_prob_unconstrained(y))
             assert native == pytest.approx(contract, abs=tolerances.cross_backend)
+
+
+# ---------------------------------------------------------------------------
+# A stored record of the kind reads back
+# ---------------------------------------------------------------------------
+
+
+class TestTheRecord:
+    def test_a_line_flux_record_round_trips_by_kind_name(self, backend: ConformanceBackend) -> None:
+        """``ampere.results`` rebuilds a container by its kind's name (training sets do)."""
+        if backend.name != "reference":
+            pytest.skip("the record is backend-neutral; one column carries the row.")
+        from ampere.results import container_from_dict, container_to_dict, kind_named
+
+        table = LineFluxes(
+            TRANSITIONS, REST * u.um, np.ones(3) * W_M2, uncertainty=0.1 * np.ones(3) * W_M2
+        )
+        assert kind_named("LineFluxes") is LineFluxes
+        back = container_from_dict(container_to_dict(table))
+        assert isinstance(back, LineFluxes)
+        assert back.transitions.tolist() == TRANSITIONS
+        np.testing.assert_array_equal(back.rest_wavelength.values, REST)
