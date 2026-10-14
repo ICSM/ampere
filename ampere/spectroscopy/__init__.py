@@ -18,8 +18,9 @@ stay in each backend, under the backend rule (one name per backend, a native
 problem composed entirely from one backend's pieces). What is defined here and
 nowhere else is the reader, :func:`read_jwst` (:mod:`ampere.spectroscopy.jwst`).
 
-**What is re-exported, and what is not.** The kinds :class:`~ampere.core.Spectrum`
-and :class:`~ampere.core.PhotometricPoints`; the four families a flux is scored
+**What is re-exported, and what is not.** The kinds :class:`~ampere.core.Spectrum`,
+:class:`~ampere.core.PhotometricPoints` and :class:`~ampere.core.LineFluxes`
+(W7.9); the four families a flux is scored
 with (:class:`~ampere.core.GaussianFamily`, :class:`~ampere.core.StudentTFamily`,
 :class:`~ampere.core.CauchyFamily`, :class:`~ampere.core.PoissonFamily` — the
 complex, Rice and von Mises families are interferometric and live behind
@@ -27,12 +28,14 @@ complex, Rice and von Mises families are interferometric and live behind
 (:class:`~ampere.backends.reference.Resample`,
 :class:`~ampere.backends.reference.LSFConvolution`,
 :class:`~ampere.backends.reference.CalibrationScale`,
-:class:`~ampere.backends.reference.SyntheticPhotometry`); and the reader with
-its error. The noise models (``IndependentNoise``, ``GaussianProcessNoise``)
-and the kernels are not, following the interferometry door's line: they belong
-to every observable alike, and a fit imports them from :mod:`ampere.core`. Nor
-are the source models: a spectral model is the user's choice of physics, not
-part of the observable.
+:class:`~ampere.backends.reference.SyntheticPhotometry`,
+:class:`~ampere.backends.reference.LineIntegration`); and the reader with
+its error. A fit to a table of line fluxes rather than a spectrum is the
+:doc:`line_fluxes` tutorial. The noise models (``IndependentNoise``,
+``GaussianProcessNoise``) and the kernels are not, following the
+interferometry door's line: they belong to every observable alike, and a fit
+imports them from :mod:`ampere.core`. Nor are the source models: a spectral
+model is the user's choice of physics, not part of the observable.
 
 **Torch and jax users** compose from their own backend's pieces, as before.
 Nothing native is re-exported here, because a reference step in a torch
@@ -47,6 +50,7 @@ from __future__ import annotations
 
 from ampere.backends.reference import (
     CalibrationScale,
+    LineIntegration,
     LSFConvolution,
     Resample,
     SyntheticPhotometry,
@@ -54,6 +58,7 @@ from ampere.backends.reference import (
 from ampere.core import (
     CauchyFamily,
     GaussianFamily,
+    LineFluxes,
     PhotometricPoints,
     PoissonFamily,
     Spectrum,
@@ -68,6 +73,8 @@ __all__ = [
     "GaussianFamily",
     "JWSTError",
     "LSFConvolution",
+    "LineFluxes",
+    "LineIntegration",
     "PhotometricPoints",
     "PoissonFamily",
     "Resample",

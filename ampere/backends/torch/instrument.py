@@ -54,10 +54,13 @@ import astropy.units as u
 import numpy as np
 import torch
 
+from ampere.backends.reference.instrument import LINE_FLUX_UNIT
+from ampere.backends.reference.instrument import LineIntegration as _ReferenceLineIntegration
 from ampere.core import (
     DTYPE,
     Axis,
     AxisRequirement,
+    LineFluxes,
     PhotometricPoints,
     Spectrum,
     Transformation,
@@ -73,6 +76,7 @@ __all__ = [
     "DETECTORS",
     "CalibrationScale",
     "LSFConvolution",
+    "LineIntegration",
     "Resample",
     "SyntheticPhotometry",
     "TorchStep",
@@ -897,3 +901,97 @@ def _to_micron(coordinates: Any) -> np.ndarray:
     if isinstance(coordinates, torch.Tensor):
         return to_numpy(coordinates).astype(DTYPE, copy=False)
     return np.asarray(coordinates, dtype=DTYPE)
+
+
+class LineIntegration(_ReferenceLineIntegration):
+    """Integrate a spectrum over one window per emission line, in torch (*W7.9*).
+
+    ``Spectrum -> LineFluxes``: ``∫(F_nu - C_nu) dnu`` over each line's window,
+    in W m⁻², from a model in Jy on a micron grid — see
+    :class:`ampere.backends.reference.LineIntegration` for the convention and
+    the two continuum declarations.
+
+    **Inherited, not re-declared**, unlike this module's other steps, and by
+    ``interferometry.rst`` §8's first clause rather than against this module's
+    own rule: here the *declaration* is the substantial, dangerous half — the
+    per-line window grids, the overlap refusal, the trapezoid weights and the
+    continuum's edge columns, whose union is published as ``points=`` and must
+    match the reference backend's to the last bit or the two negotiate
+    different grids — and the arithmetic is one ``matmul``. So the window
+    geometry is built once, in numpy, by the reference constructor; the
+    weights are then registered a second time as a **torch buffer** on
+    :attr:`tensors` (``lowering.md`` §7: moved by ``.to()``, never
+    differentiated), which is what :meth:`influence_tensor` places on the
+    negotiated axis with ``Axis.locate`` and :meth:`apply_flux` multiplies.
+    """
+
+    DIFFERENTIABLE: ClassVar[bool] = True
+    BATCHABLE: ClassVar[bool] = True
+    DEVICE: ClassVar[str] = "cpu"
+    BACKEND: ClassVar[str] = BACKEND
+
+    def __init__(
+        self,
+        *args: Any,
+        dtype: torch.dtype = DEFAULT_DTYPE,
+        device: torch.device = DEFAULT_DEVICE,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        place(self, dtype, device)
+        self.tensors = LoweredParameters()
+        self.tensors.register_buffer(
+            "weights",
+            as_tensor(self._data("weights"), dtype=self.dtype, device=self.device),
+            persistent=True,
+        )
+
+    def to(self, *, dtype: Any = None, device: Any = None) -> LineIntegration:
+        """Move the weights tensor, and re-declare where this step lives."""
+        return move(self, dtype=dtype, device=device)
+
+    def influence_tensor(self, axis: Any) -> torch.Tensor:
+        """The ``(n_lines, n_samples)`` matrix against the whole of *axis*, in torch."""
+        index = torch.as_tensor(
+            np.asarray(axis.locate(self.tabulation()), dtype=np.int64), device=self.device
+        )
+        full = torch.zeros(
+            (len(self.transitions), int(axis.size)), dtype=self.dtype, device=self.device
+        )
+        full[:, index] = self.tensors.get_buffer("weights")
+        return full
+
+    def influence(self, axis: Any) -> np.ndarray:
+        """:meth:`influence_tensor` on the numpy side of the boundary."""
+        return to_numpy(self.influence_tensor(axis))
+
+    def rest_grid(self) -> torch.Tensor:
+        """The rest wavelengths, micron, as a tensor — the output coordinates."""
+        return as_tensor(self.rest_wavelengths(), dtype=self.dtype, device=self.device)
+
+    def apply_flux(
+        self, flux: torch.Tensor, grid: torch.Tensor, values: Any
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """The line integrals, onto the rest wavelengths.
+
+        The axis is rebuilt from the bare coordinates so the lookup stays the
+        axis's job (``spectrum_photometry.md`` Gap 1), as
+        :class:`SyntheticPhotometry`'s native surface does. The flux is taken
+        to be in Jy: the contract path refused any other unit at composition
+        (:meth:`check_input_unit`).
+        """
+        coordinates = to_numpy(grid).astype(DTYPE, copy=False)
+        axis = Axis.build("spectral_axis", coordinates, COORDINATE_UNIT)
+        return self.influence_tensor(axis) @ flux, self.rest_grid()
+
+    def apply(self, samples: Any, values: Any) -> LineFluxes:
+        self.check_input_unit(samples)
+        weights = self.influence_tensor(samples.spectral_axis)
+        flux = as_tensor(samples.values, dtype=self.dtype, device=self.device)
+        return LineFluxes(
+            self.transitions,
+            self.rest_wavelengths() * COORDINATE_UNIT,
+            to_numpy(weights @ flux),
+            unit=LINE_FLUX_UNIT,
+            mask=propagate_mask(samples, to_numpy(weights)),
+        )

@@ -111,7 +111,13 @@ from .gp import (
 )
 from .astrometry import EpochSample, ReflexOrbit
 from .image import PSFConvolution
-from .instrument import CalibrationScale, LSFConvolution, Resample, SyntheticPhotometry
+from .instrument import (
+    CalibrationScale,
+    LineIntegration,
+    LSFConvolution,
+    Resample,
+    SyntheticPhotometry,
+)
 from .interferometry import (
     Amplitude,
     BandwidthSmearing,
@@ -183,6 +189,7 @@ __all__ = [
     "JaxOps",
     "JointGaussianProcessNoise",
     "LSFConvolution",
+    "LineIntegration",
     "LoweredParameterSet",
     "LoweredProblem",
     "LoweringFallbackWarning",

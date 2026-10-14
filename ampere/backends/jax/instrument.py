@@ -64,6 +64,12 @@ from ampere.backends.reference.instrument import (
     CalibrationScale as _ReferenceCalibrationScale,
 )
 from ampere.backends.reference.instrument import (
+    LINE_FLUX_UNIT,
+)
+from ampere.backends.reference.instrument import (
+    LineIntegration as _ReferenceLineIntegration,
+)
+from ampere.backends.reference.instrument import (
     LSFConvolution as _ReferenceLSFConvolution,
 )
 from ampere.backends.reference.instrument import (
@@ -72,7 +78,7 @@ from ampere.backends.reference.instrument import (
 from ampere.backends.reference.instrument import (
     SyntheticPhotometry as _ReferenceSyntheticPhotometry,
 )
-from ampere.core import Axis, PhotometricPoints, Spectrum, propagate_mask
+from ampere.core import Axis, LineFluxes, PhotometricPoints, Spectrum, propagate_mask
 from ampere.core.exceptions import TransformationError
 
 from ._config import BACKEND, require_x64
@@ -82,6 +88,7 @@ __all__ = [
     "COORDINATE_UNIT",
     "CalibrationScale",
     "LSFConvolution",
+    "LineIntegration",
     "Resample",
     "SyntheticPhotometry",
 ]
@@ -343,5 +350,58 @@ class SyntheticPhotometry(_JaxStep, _ReferenceSyntheticPhotometry):
             self.pivots() * COORDINATE_UNIT,
             np.asarray(integrated),
             unit=samples.unit,
+            mask=propagate_mask(samples, weights),
+        )
+
+
+class LineIntegration(_JaxStep, _ReferenceLineIntegration):
+    """Integrate a spectrum over one window per emission line, in jax (*W7.9*).
+
+    ``Spectrum -> LineFluxes``: ``∫(F_nu - C_nu) dnu`` over each line's window,
+    in W m⁻², from a model in Jy on a micron grid — see
+    :class:`ampere.backends.reference.LineIntegration` for the convention and
+    the two continuum declarations.
+
+    **Inherited, not re-declared** (``interferometry.rst`` §8's first clause):
+    the window geometry — the per-line grids, the overlap refusal, the
+    trapezoid weights, the continuum's edge columns — is the substantial,
+    dangerous half of this step, and two backends tabulating it twice could
+    publish ``points=`` that differ in the last bit; the arithmetic is one
+    ``matmul``. So everything but that ``matmul`` is the reference class's,
+    including the ``Axis.locate`` column placement (``spectrum_photometry.md``
+    Gap 1) and :meth:`from_observed`.
+    """
+
+    def rest_grid(self) -> jax.Array:
+        """The rest wavelengths, micron, as a jax array — the output coordinates."""
+        return jnp.asarray(self.rest_wavelengths(), dtype=jnp.float64)
+
+    def apply_flux(
+        self, flux: jax.Array, grid: jax.Array, values: Any
+    ) -> tuple[jax.Array, jax.Array]:
+        """The native surface: the line integrals, onto the rest wavelengths.
+
+        The incoming coordinates are a bare array, and the inherited
+        :meth:`influence` needs an :class:`~ampere.core.Axis` — the lookup is
+        the axis's job — so the axis is rebuilt here, exactly as
+        :class:`SyntheticPhotometry`'s native surface does, rather than the
+        lookup being skipped. The flux is taken to be in Jy: the contract path
+        refused any other unit at composition (:meth:`check_input_unit`).
+        """
+        coordinates = np.asarray(grid, dtype=float)
+        axis = Axis.build("spectral_axis", coordinates, COORDINATE_UNIT)
+        return self._influence_jax(axis) @ flux, self.rest_grid()
+
+    def apply(self, samples: Any, values: Any) -> LineFluxes:
+        self.check_input_unit(samples)
+        weights = np.asarray(self.influence(samples.spectral_axis), dtype=float)
+        integrated = jnp.asarray(weights, dtype=jnp.float64) @ jnp.asarray(
+            samples.values, dtype=jnp.float64
+        )
+        return LineFluxes(
+            self.transitions,
+            self.rest_wavelengths() * COORDINATE_UNIT,
+            np.asarray(integrated),
+            unit=LINE_FLUX_UNIT,
             mask=propagate_mask(samples, weights),
         )

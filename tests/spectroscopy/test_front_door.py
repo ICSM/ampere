@@ -14,6 +14,7 @@ from ampere.spectroscopy import jwst
 HOMES = {
     "Spectrum": core,
     "PhotometricPoints": core,
+    "LineFluxes": core,
     "GaussianFamily": core,
     "StudentTFamily": core,
     "CauchyFamily": core,
@@ -22,6 +23,7 @@ HOMES = {
     "LSFConvolution": reference,
     "CalibrationScale": reference,
     "SyntheticPhotometry": reference,
+    "LineIntegration": reference,
     "read_jwst": jwst,
     "JWSTError": jwst,
 }

@@ -539,6 +539,8 @@ class TorchBackend:
         image=True,
         # Both, since W2.4 slice 2: see the module docstring.
         solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP, SolverKind.HILBERT}),
+        # **W7.9**: the inheriting line-integration twin.
+        line_fluxes=True,
     )
 
     def model(self, spec: ModelSpec) -> Model:
@@ -606,3 +608,19 @@ class TorchBackend:
 
     def to_numpy(self, values: Any) -> np.ndarray:
         return to_numpy(values)
+
+    def line_fluxes(self) -> LineFluxPieces:
+        # W7.9 -- appended.
+        return TORCH_LINE_FLUXES
+
+
+# W7.9 -- appended at the end so a neighbouring item's edits merge cleanly.
+from ampere.backends.torch import LineIntegration as _LineIntegration  # noqa: E402
+
+from ..protocol import LineFluxPieces  # noqa: E402
+
+#: This backend's line-flux vocabulary, as one record (*W7.9*). The shipped
+#: class, unmodified: it declares ``BACKEND = "torch"`` and inherits the
+#: reference step's window geometry, so the composed problems in
+#: ``test_line_fluxes.py`` are single-backend ones.
+TORCH_LINE_FLUXES = LineFluxPieces(line_integration=_LineIntegration)

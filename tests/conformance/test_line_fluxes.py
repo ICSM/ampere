@@ -536,3 +536,38 @@ class TestTheRefusals:
         bare = LineFluxes(TRANSITIONS, REST * u.um, np.ones(3) * W_M2)
         with pytest.raises(TransformationError, match="window"):
             pieces.line_integration.from_observed(bare)
+
+
+# ---------------------------------------------------------------------------
+# (i) The native realisation agrees with the contract path
+# ---------------------------------------------------------------------------
+
+
+class TestTheRealisation:
+    """The native twins' ``apply_flux``, composed by ``realise``, against the contract path."""
+
+    @pytest.mark.parametrize("flexible", [False, True], ids=["independent", "dense_gp"])
+    def test_the_realised_density_is_the_contract_density(
+        self, backend: ConformanceBackend, tolerances: Tolerances, flexible: bool
+    ) -> None:
+        from ampere.core import realise, registered_realisations
+
+        pieces = pieces_or_skip(backend)
+        table = observed_table(backend, pieces, [1, 2, 0])
+        noise = None
+        if flexible:
+            flux = np.asarray(table.to_unit(W_M2).flux, dtype=float)
+            spec = CovarianceSpec(
+                KernelFamily.MATERN32, float(0.05 * flux.mean()), 2.0, axes=("spectral_axis",)
+            )
+            noise = backend.gp_noise(backend.kernel(spec), backend.gp_solver(SolverKind.DENSE))
+        problem = composition(backend, pieces, table, noise=noise)
+        if problem.backend not in registered_realisations():
+            pytest.skip(f"the {problem.backend!r} backend registers no realisation.")
+        realised = realise(problem)
+        for index in (-1.6, -1.3, -0.9):
+            theta = problem.parameters.pack({**TRUTH, "model.index": index})
+            y = problem.unconstrain(theta)
+            native = float(np.asarray(backend.to_numpy(realised.log_prob_unconstrained(y))))
+            contract = float(problem.log_prob_unconstrained(y))
+            assert native == pytest.approx(contract, abs=tolerances.cross_backend)

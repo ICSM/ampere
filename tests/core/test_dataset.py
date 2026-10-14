@@ -2934,7 +2934,7 @@ class TestLineFluxAlignmentByTransition:
     refusals by name, and no reordering under a ``Censoring``.
     """
 
-    LABELS = ["[S IV] 10.51", "H I 7-6", "[Ne II] 12.81"]
+    LABELS: ClassVar[list[str]] = ["[S IV] 10.51", "H I 7-6", "[Ne II] 12.81"]
     REST = np.array([10.5105, 12.3719, 12.8135])
 
     def predicted(self) -> Any:
