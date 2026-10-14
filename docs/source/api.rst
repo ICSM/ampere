@@ -28,6 +28,7 @@ Ampere v2
    ampere.inference
    ampere.results
    ampere.interferometry
+   ampere.spectroscopy
 
 Migrating
 ---------
