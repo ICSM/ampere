@@ -390,8 +390,10 @@ optimisers at W6.7. What remains, by value:
   `EmulatedModel` (L); the radial-profile modality with the disc example
   (L); the filter library and the photometry reader (M); the model zoo
   promotion (M); fillers: `from_specutils`, the IRS reader, the uv-table
-  reader, `compare` (M). Theme: a user brings their own model and their
-  own data and gets every engine.
+  reader, `compare` (M); **§12's `EquispacedFourierGP` on torch and jax
+  with the solver-by-device table (L; added 2026-10-14)**. Theme: a user
+  brings their own model and their own data and gets every engine, and
+  the docs say which GP solver to pick by data shape and device.
 - **Phase 9 — hierarchy at depth and at scale**: the nested-populations
   memo and item (L); hierarchical SBI (M); the columnar store and
   population inference at scale (L); the IFU cube with the `s3d` reader
@@ -430,6 +432,11 @@ for Peter at drafting.
 7. **The paper**: which of the above the paper's revision needs — the
    radial profile and the emulator are the two with figures a paper would
    want — so the order can serve it.
+8. **The large-N solver on an accelerator** (added 2026-10-14): §12's
+   item as drafted — EFGP promoted to torch and jax and the four-solver
+   table measured on the cluster — or HSGP alone documented as the
+   accelerator route and EFGP left a prototype? Recommendation: the item,
+   drafted after W7.10's cluster run supplies the scan's GPU numbers.
 
 ## 11. The questions' impact (the exchange of 2026-10-05, recorded for the ruling)
 
@@ -530,3 +537,82 @@ foreign function first; Q3 Phase 9 by plan; Q4 IRS first, then the memo's
 order; Q5 the package; Q6 the list, the JOSS paper decided later; Q7
 nothing pulled forward. Phase 7 stays as ruled and Phase 8 opens with two
 dispatchable items and one memo.
+
+## 12. A Phase 8 item added 2026-10-14: the large-N solver on an accelerator
+
+Added by the orchestrating session on Peter's word during W7.10's review,
+from a measurement that session made and the question it raised. It is
+written as a `WORK_ITEMS.md` entry so that Phase 8's drafting lifts it
+whole; its number is assigned at drafting.
+
+**The measurement.** W7.10 lands the jax quasiseparable recursion as a
+`lax.scan` provider so that the jax `QuasisepGP` can live on an
+accelerator and under `vmap`. The branch's own measurement showed the
+scan's *forward factorisation* linear in N once the loop is unrolled by two
+(`performance_memo.md` §9). The orchestrator's review harness measured the
+jitted **value and gradient** instead, one process per point, on a shared
+machine (the W7.2 torch leg running beside), and found the gradient not
+linear on XLA:CPU:
+
+| N | celerite2 (ms) | scan, unroll 2 (ms) |
+|---|---|---|
+| 10³ | 0.41 | 3.05 |
+| 10⁴ | 4.57 | 114 |
+| 10⁵ | 25.1 | 10 107 |
+
+The fitted exponent between 10⁴ and 10⁵ is about 1.9. The final table in
+the memo's §9 is the record and may revise these figures; the
+decade-to-decade ratios are too large for the shared machine to explain.
+The point that does not depend on the figures is structural: **a scan is
+sequential by construction**, so even a linear scan gains nothing from an
+accelerator along N for one long spectrum. The accelerator's win is across
+the batch — walkers, the members of a population, SBI simulations under
+`vmap` — which is what W7.10's provider was ruled for (D9) and still
+delivers. The CPU answer for one long spectrum stays celerite2, and nothing
+in the measurement changes that.
+
+**What exists.** `HilbertSpaceGP` (W5.4) is on all three backends,
+`BATCHABLE` on jax, and its cost is dense products in N by m — the
+accelerator-shaped large-N solver the package already has, and the one
+that works in two dimensions where the quasiseparable route does not.
+`EquispacedFourierGP` (`ampere/core/efgp.py`) is a reference-only
+prototype: the W5.6 ruling measured it against HSGP on the image bake-off,
+found it faster past m ≈ 576 at 4.7× less memory and more accurate at
+matched frequency reach, bounded it to a constant factor on the same
+complexity class because log|M| has no FFT, and recommended it "for a
+follow-on three-backend item", naming it the one to reach for at image
+scale. That follow-on is this item.
+
+### W8.n — `EquispacedFourierGP` on torch and jax, and the solver-by-device table [L; Opus] (W5.6's recommended follow-on; raised 2026-10-14 at W7.10's review)
+The reference prototype `ampere.core.efgp.EquispacedFourierGP` promoted
+to a shipped strategy with native twins on torch and jax, as
+`HilbertSpaceGP` was at W5.4: the equispaced frequency grid, the Toeplitz
+normal matrix assembled by FFT, the Woodbury likelihood with the O(m³)
+log-determinant the W5.6 ruling settled on (never a stochastic one — a
+noisy likelihood is a correctness failure for every engine), the
+conditional and `conditional_loo` through the same identity, `EXACT =
+False` held to `tolerances.approximation_envelope`, `BATCHABLE` true on
+both backends, one name per backend, `likelihoods.md` §7's row changed
+from "prototype" to "shipped" with the decision-log entry rule 9 requires.
+Its gate is a **measured table, not a claim**: `tests/gpu` gains rows that
+time the jitted value and gradient of `DenseGP` (to 10⁴), `QuasisepGP`
+with the scan provider, `HilbertSpaceGP` and `EquispacedFourierGP` at 10³,
+10⁴, 10⁵ and 10⁶ points on the cluster's GPU, single and under `vmap` over
+a batch of 32, with the CPU column from `pixi run -e jax scaling` beside
+them, recorded in `performance_memo.md` as a new section with the device,
+the jax and CUDA versions and the memo's "measured on" discipline; the
+same rows on the torch backend for the torch column. The table decides
+the docs: `docs/source/solvers.rst` gains "Which solver, by data shape
+and device" — one long 1-D spectrum on the CPU (celerite2), batches and
+accelerators (the scan for exactness, HSGP or EFGP by the table), images
+(EFGP or HSGP by the table) — replacing any sentence that implies the
+scan is the large-N route. The W5.6 bake-off (`examples/image/bakeoff.py`)
+re-run with the native twins so its figures carry over.
+**Depends:** W7.10 merged (the scan provider is one column, and its
+cluster run the first GPU numbers); a cluster run per
+`scripts/cluster/run.sh` at the item's head, on Peter's word. **Accept:**
+the conformance columns green on all three backends with the new fixture
+rows (the cross-solver agreement at `approximation_envelope` on the image
+and the long-spectrum scenarios); the GPU rows green and the table in
+the memo; the docs section with the table's numbers; the bake-off's
+figures regenerated; the decision-log row; gates torch, jax and dev.
