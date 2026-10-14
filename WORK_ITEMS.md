@@ -4269,6 +4269,480 @@ their rows record the three legs.
   **Recommended: the `Censoring` filler and the migration-page note in
   this phase; the rest stays recorded.**
   **Ruled 2026-10-05: the `Censoring` filler (W7.11) and the migration-page note (in W7.5); the rest stays recorded.**
+## Phase 8 — Any model, any data: the foreign function, the radial profile, the readers (drafted 2026-10-15 by Fable; **awaiting Peter's rulings D1–D12 below**; the sources are `docs/design/horizon_beyond_phase7.md` §9's shape re-ranked by `docs/design/user_journeys_memo.md` §6 and §8.1a, and the horizon memo's §12 item)
+
+The second phase after the beta, and the first whose items come from
+the two memos written at Phase 7's opening rather than from a design memo
+of their own. Its sources, in the order they were written: the horizon
+memo (`docs/design/horizon_beyond_phase7.md`, 2026-10-05) — §2 the
+foreign function and the emulator, §3 radial profiles, §5 the readers,
+§6 model comparison, §8 the model zoo and the release train, §9 the
+three-phase shape, §10–§11 the questions and what each decides, §12 the
+large-N solver item added at W7.10's review; the user-journeys memo
+(`docs/design/user_journeys_memo.md`, 2026-10-06) — §4 (2) the numpyro
+kernels, §5 what Peter's answers change, §6 the horizon re-ranked by
+users served, §8.1 the flagship's data and Peter's answer, §8.1a what
+folds in "at Phase 8's drafting"; Peter's rulings of 2026-10-06 (the
+radial profile is required for papers planned soon and keeps its place
+in the first wave; the debris-disc sample is the Phase 8 flagship, read
+from its public repository at a pinned commit, the model ported); the
+Phase 7 rows' carried findings (the housekeeping item); and the open
+issues (#64 is an item, #82 a decision). **Read the two memos' sections
+an item names before dispatching it**; the item texts point at them
+rather than restating them. The plan's §5 Phase 8 section is written
+from this one at approval, as every phase's was. Sized under
+`docs/orchestration.md`'s rules: two agents at a time, gate legs scoped to
+the code touched, CI on the push after merge as the gate of record, the
+GPU rows on the cluster where an item names them. Every §4 change is a
+decision-log row and conformance rows in the same PR (ground rule 9) —
+this phase has three such additions (a kind and four steps, W8.2; a
+model class with a capability flag, W8.0; a solver promoted from
+prototype, W8.7) and one memo-first item (the emulator, W8.3 → W8.4).
+
+**What the phase delivers.** (1) *Any model*: a user's own routine —
+Fortran, C, a radiative-transfer code, a legacy numpy model — enters a
+native problem on torch and jax as a `ForeignModel`, with every
+gradient-free engine, the batched path and the GP likelihood on the
+accelerator, and a `NumpyroEngine` whose gradient-free kernel runs it;
+the emulator becomes a first-class, differentiable, misspecification-aware
+model after its memo. (2) *Any data*: three readers (catalogue photometry
+with the filter library that closes #64, Spitzer IRS, specutils) and the
+uv table, each by W6.12's pattern. (3) *Azimuthal symmetry*: the radial
+profile as a model and as an observable, the Hankel route, the disc
+example on real data — the item planned papers need. (4) *The solver
+table*: `EquispacedFourierGP` on torch and jax and the measured
+solver-by-device table that tells a user which GP solver to pick.
+(5) *Model comparison* as a module. (6) *The package*: the models users
+reach for promoted out of the examples, the debris-disc flagship staged,
+the carried list cleared, `1.0.0b3`. Not in this phase, recorded as
+decisions: nested populations and the store (Phase 9 by plan), the IFU
+cube, approximate-inference correction, pocoMC, the declarative problem
+file, `1.0.0` final's criteria (Phase 10).
+
+### W8.0 — `ForeignModel` on torch and jax [S per backend; Opus] (horizon §2 (a); D2)
+A host callable inside a traced computation on each native backend —
+`jax.pure_callback` with `vmap_method` for the batched path, a
+`torch.autograd.Function` on torch — as `ForeignModel(fn, output=...)`
+declaring its output channels, shapes and dtypes up front and
+`DIFFERENTIABLE = False`, so the capability ladder does what it promises:
+NUTS and VI refuse by name, every gradient-free engine on the native path,
+`log_prob_unconstrained_batched` and the GP likelihood on the accelerator
+work. An optional Jacobian — user-supplied, or
+`jacobian="finite-difference"` with an explicit step — makes it
+differentiable through a `custom_jvp` / backward at one call per
+parameter per gradient, the flag saying which. Provenance records the
+callable by qualified name and a source hash (the external-simulator
+example's pickling pattern). `lowering.md` §8 gains the paragraph that
+says what a foreign piece is allowed to be (the 2026-09-09 ruling "non-native
+parts refused by default; accepted under an explicit opt-in" is the
+hook — this is that opt-in, named); the decision-log row. Conformance:
+a foreign numpy `BlackBody` agreeing with the native one on every engine
+the flags admit, the refusal rows for the ones they do not, the batched
+row, the finite-difference Jacobian against the native gradient at a
+loose tolerance. A worked example: a Fortran-style opacity routine
+(numpy, `ctypes`-shaped) inside a native dust model, the native part
+carrying the gradient. **Depends:** nothing. **Accept:** the conformance
+rows green on both backends; the docs page section "Your own routine in a
+native problem" on `advanced.rst` or its own page; the decision-log row;
+gates torch and jax (+ dev for the core flag).
+
+### W8.1 — `NumpyroEngine(method=)`: `sa`, `nested`, `barker` [S; Sonnet] (user-journeys memo §4 (2))
+On `BlackjaxEngine(method=)`'s pattern, a `NumpyroEngine` over the
+`numpyro_model` ampere already emits: `sa` (sample-adaptive, gradient-free
+— the method a `ForeignModel` without a Jacobian runs under on the native
+path), `nested` (numpyro's `NestedSampler`, the jaxns wrapper — an
+evidence on the jax problem, which turns horizon §6.4's jaxns item from
+S to XS; behind the `jaxns` extra), `barker` (low priority, included
+because it is one table row). The results contract already covers each
+output (draws; the evidence triple for `nested`; `ampere_approximation`
+none). `HMCECS` recorded for Phase 9, not taken. **Depends:** nothing
+(W8.0 is its customer, not its prerequisite). **Accept:** the engine rows
+in `tests/inference` on the M2 flexible problem (agreement with NUTS's
+posterior at the engines' tolerance; `nested`'s evidence against
+dynesty's at the nested engines' tolerance); the SBI page's engine table
+and `inference.md`'s engine list amended; gates jax.
+
+### W8.2 — Radial profiles and azimuthal symmetry: the kind, the steps, the models, the disc example [L; Opus] (horizon §3; D1)
+The modality template, both readings in one item (D1): the kind
+`RadialProfile` (coordinate `r` in angular units, value a surface
+brightness, `Layout.POINTS`); the steps `Deproject` (`VisibilitySet →
+VisibilitySet`: inclination, position angle and offset as parameters,
+coordinates rotated and scaled, the phase ramp applied — the first
+`Derived` customers outside the W6.11 memo: a ring's width as a ratio of
+radii, `cos i` from an aspect ratio), `HankelTransform` (`RadialProfile →
+VisibilitySet` at the deprojected baseline lengths; a dense `N_ρ × N_r`
+quadrature of `2π ∫ I(r) J₀(2πρr) r dr` at the sizes that matter, the
+discrete Hankel transform as the large-N route, `J₀` from
+`jax.scipy.special.bessel_jn` / `torch.special.bessel_j0` — no foreign
+function), `Render` (`RadialProfile → Image` on a pixel grid, for the
+image and photometry routes) and `AzimuthalAverage` (`Image →
+RadialProfile`, the observed-side step); models `GaussianRing`,
+`PowerLawDisc` with gaps, `Sersic`, and `LatentProfile` — the profile as
+a latent GP in `log r` through the `CONSUMES_LATENT_GP` opt-in, which
+makes the `frank`-style non-parametric fit a declaration; the
+conformance rows (the uniform disc's Hankel transform against
+`UniformDiscVisibilities`, the Gaussian's against
+`GaussianSourceVisibilities`, `Render` then `FourierSample` against the
+direct `HankelTransform`, `AzimuthalAverage` of a rendered profile
+recovering it, every step on the three backends); `transformations.md`
+§10's Hankel slot filled and the `results_schema.md` §12 paragraph with
+a doctest; the decision-log row. The worked example on real data: a
+public ALMA continuum uv table (a DSHARP disc, or the small set `frank`
+ships) through W8.12's reader — or, if W8.12 has not landed, a VLTI set
+through `read_oifits` — fitted as a parametric disc plus a GP correction
+in `r`, which is the misspecification story on a new axis; `frank`'s
+published profile as the comparison figure. Page `radial_profiles.rst`
+in the template's nine sections. **Depends:** W7.0 (merged); W8.12 for
+the ALMA example (else the VLTI route). **Accept:** the conformance
+columns green on the three backends; the example's measured numbers
+pinned over three seeds in the page; the decision-log row; the four
+plots run on the new kind; gates all three.
+
+### W8.3 — The emulator memo [M; Fable's own work between waves] (horizon §2 (b); D2)
+`docs/design/emulator_memo.md` on W6.11's pattern: the contract from a
+training set (`simulate_many`'s output, the artefact store) to a model —
+`train_emulator(model, prior, budget, architecture=...)`; the
+coordinate-conditioned decoder (a neural-operator or SetConv head) so the
+emulator answers on any sampling of its output function and takes part in
+requirements negotiation, which the PHOENIX prototype's fixed grid cannot;
+**the error model** — the emulator's predictive variance (an ensemble's
+spread, a GP emulator's posterior variance, a held-out residual model)
+entering the likelihood as a `FractionalModelNoise` term or a GP noise
+component with a fitted amplitude, so the flexible likelihood absorbs
+emulation error as it absorbs physics error and the M2 methodology
+measures whether it did; Bayesian optimisation as acquisition for the
+training set (the inference memo's §10 ruling); what provenance carries
+(the training set's spec hash, the architecture, the error model); the
+questions for Peter and the drafted W8.4 text. Opus-reviewed read-only
+as W6.11 was. **Depends:** nothing. **Accept:** the memo with its
+decision list; two probes against the PHOENIX prototype (`examples/phoenix_star`)
+showing the contract fits it; no code.
+
+### W8.4 — `EmulatedModel` and `train_emulator` [L; Opus] (after W8.3; D2)
+The memo executed: `ampere.core.EmulatedModel` present on the three
+backends (the trained weights a buffer, the decoder's arithmetic through
+`ArrayOps` so one definition serves all three), `train_emulator` over the
+training-set writer and the artefact store with the memo's architecture
+table, the error model as a noise component the user declares in one
+line, the spec hash in provenance invalidating a stale emulator loudly
+(the W5.32 (j) rule). The worked example: Hyperion's carbon star
+(`examples/cstar`) emulated and fitted with NUTS beside the existing SBI
+fit of the same model, the two routes compared on one problem — the
+figure a paper wants; the M2 row measuring that the error component
+absorbed the emulation error (coverage with and without it). The PHOENIX
+example rewritten over the package class, its hand-built emulator
+retired. **Depends:** W8.3 ruled. **Accept:** the conformance rows (the
+emulated blackbody against the native one inside the declared error on
+every backend); the carbon-star example's two routes agreeing at the
+engines' tolerance with the measured coverage pinned; `sbi.rst`'s "Very
+slow models" section rewritten to send the cheap-foreign case to W8.0 and
+the expensive case here; the decision-log row; gates all three (+ sbi).
+
+### W8.5 — Catalogue photometry: the `FilterLibrary` from SVO, `read_photometry`, `ampere.photometry` [M; Opus] (horizon §5.1; issue #64)
+The SED-fitting entry point most users start from. (1) A v2
+`FilterLibrary` fetched from the SVO Filter Profile Service by filter
+name with a local cache directory (no new dependency unless the item finds one necessary and says so) and a pinned
+snapshot of the filters the tests and examples use vendored under
+`tests/data` with provenance, replacing the 45 MB `ampere_allfilters.hd5`
+bundled in the wheel (#64: "generate the library rather than download
+it") — the bundle stays one release as a fallback behind a loud warning
+naming the fix, then goes (a D-question below); `SyntheticPhotometry.from_library`
+reads the new library, `pyphot` becomes optional (its compat layer
+retired when the bundle goes). (2) `read_photometry`: a user's table of
+fluxes, uncertainties and filter names (astropy `Table`, CSV, VOTable —
+the star-disc example's `HD105_SED.vot` is the fixture) and the VizieR
+photometry (SED) service's VOTable through `astroquery` (optional) into
+`PhotometricPoints`, filter names resolved against the library, upper
+limits into `Censoring` (W7.11's pattern), refusals by name for an
+unknown filter and an ambiguous unit. (3) The front door
+`ampere.photometry` by W7.3's pattern (the kind, the steps, the reader,
+the library). **Depends:** nothing. **Accept:** the library's rows (a
+pinned filter's zero point and pivot against SVO's published values;
+offline skip; the cache); the reader's rows on the two fixtures and the
+refusals; the star-disc twin reading its VOTable through it; `import
+ampere` still legacy-free and the wheel smaller by the bundle's size if
+D-ruled; `photometry_spectra.rst`'s reader section; gates dev.
+
+### W8.6 — `ampere.results.compare`: model comparison across runs [M; Opus] (horizon §6.1; user-journeys §5; D8)
+The one must-have output the walkthroughs found missing. On archived
+`DataTree`s sharing a data hash: a Bayes-factor table from the nested
+engines' evidence triples with their errors; bridge sampling between two
+runs from the stored per-draw `log_prior` and `log_likelihood` and the
+problems' `log_prob`; Savage–Dickey for nested models (a parameter fixed
+at a value the wider model's prior covers); Bayesian model averaging of
+posterior predictives weighted by the table; the learnt harmonic-mean
+estimator (`harmonic`) behind an extra as the route for runs with no
+evidence (D8). Each returns a typed result the docs render as a table;
+a `compare.rst` page that replaces "roll your own" and says when each
+estimator is trustworthy (the SBC-style check on the M2 scenarios: the
+true generating model preferred at the strengths where it should be,
+measured once). **Depends:** nothing. **Accept:** the rows on the M2
+toy (two models, evidence from dynesty against bridge sampling against
+Savage–Dickey agreeing within their stated errors); the page with the
+measured table; `results.md` amended (a results-side addition, no kind
+change); gates dev (+ the extra's leg).
+
+### W8.7 — `EquispacedFourierGP` on torch and jax, and the solver-by-device table [L; Opus] (horizon §12, lifted whole; D7)
+The text is `docs/design/horizon_beyond_phase7.md` §12's "W8.n", which
+this item executes verbatim: the reference prototype
+`ampere.core.efgp.EquispacedFourierGP` promoted to a shipped strategy
+with native twins (the equispaced frequency grid, the Toeplitz normal
+matrix by FFT, the Woodbury likelihood with the O(m³) log-determinant,
+never a stochastic one; `conditional` and `conditional_loo` through the
+same identity; `EXACT = False` at `approximation_envelope`; `BATCHABLE`
+on both), `likelihoods.md` §7's row from "prototype" to "shipped" with the
+decision-log row; **the measured table** — `tests/gpu` rows timing the
+jitted value and gradient of `DenseGP` (to 10⁴), `QuasisepGP` with the
+scan provider, `HilbertSpaceGP` and `EquispacedFourierGP` at 10³–10⁶,
+single and under `vmap` over 32, on the cluster's GPU, beside the CPU
+column from `pixi run -e jax scaling`, in `performance_memo.md` as a new
+section; the torch column likewise; `solvers.rst`'s "Which solver, by
+data shape and device"; the W5.6 bake-off re-run with the twins.
+**Depends:** W7.10 (merged; its cluster log at `1333659` is the scan's
+first GPU number); a cluster run at the item's head on Peter's word.
+**Accept:** §12's list; gates torch, jax and dev.
+
+### W8.8 — The model zoo: the examples' models promoted into the package [M; Sonnet] (horizon §8; D5)
+The models users want, today in `examples/` with whatever tests their
+example has: the multi-temperature dust model with opacity tables
+(`examples/ngc6302`), the star-plus-disc model (`examples/star_disc`),
+the modified-blackbody variants (`examples/modified_blackbody`,
+`sed_composition`), the astrometry generators' `ReflexOrbit` siblings if
+any are still example-only, the extinction feature's model — each
+promoted with its native twins (`ArrayOps`, W7.13's pattern), its
+conformance row on the three fixtures, its spec hash in provenance, and
+a gallery page (`gallery.rst`) as the examples' index with each example's
+figure. The home is D5's ruling (`ampere.models` is **taken** — it is a
+legacy alias name under D1 (b) of Phase 6 and cannot be reused). A model
+needing a download (the PHOENIX grid; opacity tables) says so with a loud
+warning naming the fix, never silently (W5.32 (j)). The examples keep
+their scripts, now importing the package class. **Depends:** W8.4 for the
+PHOENIX class (else it is excluded and noted). **Accept:** each promoted
+model's conformance row green; the examples' tests green unchanged in
+their numbers; the gallery page; `import ampere` legacy-free; the wheel's
+size reported; gates all three.
+
+### W8.9 — The debris-disc flagship, staged: one disc, then 133 as a population [L; Opus] (user-journeys §3, §8.1; Peter's answer of 2026-10-06; D3)
+Marshall et al. 2026 (MNRAS 545, 2221; arXiv:2512.07573), Peter a
+co-author: 133 spatially resolved debris discs fitted with an analytic
+dust model (grain-size distribution, Mie efficiencies through
+`miepython` — W6.13 (C2)'s route, `astrosil.lnk`), the disc radius from
+imaging as an input, per-disc minimum grain size, dust mass and exponent
+q, the population q = 3.49 and the q–radius trend. Nothing committed:
+the inputs are read from `github.com/jontymarshall/SEDs_Of_Spatially_Resolved_Discs`
+at a pinned commit through a download-and-cache helper with an offline
+skip (W6.12's pattern; MIT), the model **ported** (not imported; `numba`
+dropped) and checked against the repository's emcee chains for three
+objects as the example's own acceptance row — confirming first whether
+the per-band photometry sits in the external tables or needs the
+literature references (the memo's open point). Stage 1: one disc's SED
+(persona A's case; the misspecification plots on a real SED with
+photospheric residuals and silicate features). Stage 2: the 133 as a
+`Population` over `q` with **the regression hyperprior** — the
+population's location a `Derived` on a per-object buffer (the radius)
+under a `HierarchicalPrior`, a construction the W6.11 memo did not
+anticipate (check W7.0's grammar admits a buffer symbol; if not, that is
+the item's one §4 question and it stops to report). Stage 3 (reported,
+pinned only if cheap): the GP localisation on the discs the analytic
+model fails. `examples/debris_discs/` in the M2 layout, an executed
+notebook for stage 1 (the W6.1 pattern), `tests/examples` rows, a page.
+**Depends:** W8.5 (the photometry reader reads the tables). **Accept:**
+the port agreeing with the published chains for three objects at the
+stated tolerance; stage 2's q recovering the paper's value within its
+interval on the paper's own inputs; the notebook executed at docs build
+under 120 s or `heavy`; gates jax (the population on the native path) +
+dev.
+
+### W8.10 — The Spitzer IRS (CASSIS) reader, and the star-disc twin's real spectrum [S; Sonnet] (horizon §5.3; D4, D10 — PR #82)
+`ampere.spectroscopy.read_cassis` for the CASSIS low-resolution products
+(`cassis_yaaar_*.fits`: wavelength, flux, error and the flag columns per
+order into `Spectrum` with the flags as mask, the module order stitched
+or selectable by name, the header's AOR key in `meta`), by W7.3's
+pattern; the fixture is the file PR #82 supplies, vendored under
+`tests/data` with its provenance row (IRSA/CASSIS, the pinned URL, the
+SHA-256, the redistribution basis — public archive products) if D10 rules
+so, else downloaded and cached; the star-disc twin (`examples/star_disc`)
+reads it so its IRS arm fits the real spectrum the legacy script reads
+(the W6.13 C1 gap closed), `star_disc.py`'s docstring paragraph
+corrected. **Depends:** D10. **Accept:** the reader's rows (the vendored
+file, the download route offline-skipped, the refusals); the twin's IRS
+arm green with its numbers pinned; `photometry_spectra.rst`'s reader
+section; gates dev.
+
+### W8.11 — `from_specutils`: generic 1D spectra through one optional adapter [S; Sonnet] (horizon §5.2)
+`ampere.spectroscopy.from_specutils(spectrum1d)` turning a specutils
+`Spectrum1D` (every format specutils reads: SDSS, ESO SDP, HST STIS/COS,
+generic FITS tables, ASCII) into `Spectrum` — the spectral axis to
+micron, the flux in its own unit, the mask and uncertainty carried, the
+refusals by name (a 2-D flux, a missing uncertainty under
+`require_uncertainty=True`) — behind a `specutils` extra, with the
+`OptionalDependencyError` naming it. One vendored fixture under
+`tests/data` with provenance (a small public SDSS spectrum) and a
+`specutils`-built synthetic one. **Depends:** nothing. **Accept:** the
+rows; the extra in `pyproject.toml` and `install.rst`'s table; the page's
+section; gates dev (+ a `specutils` leg or the rows under the extra).
+
+### W8.12 — The uv-table reader [S; Sonnet] (horizon §5.4; pairs with W8.2)
+`ampere.interferometry.read_uvtable` for the `.npz`/text form `frank` and
+`galario` consume (u, v in metres or wavelengths, Re, Im, weights; the
+observing wavelength from a header or argument) and UVFITS through
+`astropy.io.fits` into `VisibilitySet`, weights into uncertainties, the
+spectral axis one channel unless the file says otherwise, refusals by
+name; CASA measurement sets out (the conversion is a one-liner in CASA,
+said in the docstring). The fixture: the small uv table `frank` ships
+(its licence permits) vendored under `tests/data` with provenance.
+**Depends:** nothing. **Accept:** the rows; the interferometry page's
+reader section; gates dev.
+
+### W8.13 — Phase 8 housekeeping: Phase 7's carried list [S; Sonnet]
+The owed list from the Phase 7 rows, each a line and none a behaviour
+change: the `QuasisepGP` (jax) docstring's stale `jnp.argsort` sentence
+and `dataclasses.replace` dropping `device`/`provider` (W7.10 — `replace`
+re-supplied through `__replace__` or documented); the W6.11 memo's §4
+declaration gaining `unit=u.Jy` on the derived member (W7.2); the
+battery's `CovarianceSpec` gaining a free-hyperparameter field so W7.1's
+rows lose their `type: ignore`; `LSFConvolution`'s docstring naming the
+constant-R limitation and MIRI LRS's 40–160 (W7.3; R(λ) itself is a
+later step); a line on the optimisers page that short rows want
+`initial="prior"` (W7.3); `examples/README.md` listing the portable-model
+and line-fluxes examples (W7.13, W7.9); a CVD-safe cycler in `plots.py`
+and the many-lines figure (W7.7's hue-only findings); the NGC 6302 twin's
+GP length-scale prior floor against its 0.138 µm sampling, noted in the
+twin (W7.16); the two naming deviations of W7.9 recorded in the ruling
+or the names aligned; Python 3.15 in the CI matrix once arviz and the
+lock admit it; the `v2` branch deleted from origin on Peter's word (its
+purpose ended at D15); the open v1 issues triaged per D9 (the
+orchestrator posts, the agent drafts the pointers); the changelog's
+"Unreleased" section carrying each user-visible line. **Depends:**
+nothing. **Accept:** each line's own check; gates dev (+ jax for the
+docstring/`replace` rows).
+
+### W8.14 — The persona-C walkthrough: the carbon star through SBI and through the emulator [M; Sonnet] (user-journeys §7 (3); after W8.4)
+An executed notebook (the W6.1/W7.16 pattern) on `examples/cstar`: the
+Hyperion carbon star under `SBIEngine` from a cold cache and from a warm
+one, the time to posterior both ways; then the same model through W8.4's
+`EmulatedModel` under NUTS with the error component on and off; the
+three posteriors on one figure; what each route costs and when to choose
+it, in the user's words. The docs' "Very slow models" section links it.
+**Depends:** W8.4. **Accept:** the notebook executed at docs build under
+the budget or `heavy`; its numbers quoted in the page; gates dev + jax.
+
+### W8.15 — `1.0.0b3`: the third beta [S; Opus] (D6)
+The release procedure a third time, as W7.8 ran it: the changelog's
+"Unreleased" closed as a section, the known-limitations list rewritten
+for what this phase lifted (the foreign function; the readers' sentence;
+the solver table), the GPU rows at the candidate (W8.7's cluster run
+doubles as it if nothing under `ampere/` or `tests/gpu` changes after),
+CI green, Peter's tag, TestPyPI then PyPI behind his approval, the
+GitHub release and the version DOI, the Read the Docs version; the
+deprecations still unchanged unless D6 rules `1.0.0b3` the last beta.
+**Depends:** every Phase 8 item Peter wants in it. **Accept:**
+`ampere-astro 1.0.0b3` on PyPI from its tag; the GPU rows green; the
+decision-log row dated; the section closed.
+
+**Ordering and waves** (two agents at a time; Fable's memo between
+waves). Wave 1: **W8.0** (ForeignModel) ∥ **W8.2** (radial profiles) —
+disjoint files (a model class and its flag; a kind and steps), both on
+the three backends, so their jax and torch legs run one at a time; Fable
+writes **W8.3** beside them. Wave 2: **W8.5** (photometry and the filter
+library) ∥ **W8.6** (compare); the fillers **W8.10**, **W8.12** in the
+free slots (W8.12 before W8.2's example is written if the timing allows,
+else W8.2 takes the VLTI route and W8.12's example row joins later).
+Wave 3: **W8.4** (EmulatedModel, after W8.3's ruling) ∥ **W8.7** (EFGP;
+its cluster run on Peter's word). Wave 4: **W8.8** (the zoo, after W8.4)
+∥ **W8.9** (the flagship, after W8.5); **W8.1**, **W8.11**, **W8.13** as
+fillers wherever a slot opens; **W8.14** after W8.4. **W8.15** closes the
+phase. The §4 additions (W8.0, W8.2, W8.7) each carry their decision-log
+row and conformance rows in their PR; W8.3 is a memo and W8.4 lands its
+row.
+
+**Decisions for Peter (D1–D12).** Each with a recommendation; the
+reasoning is the horizon memo's §11 and the user-journeys memo's §5–§6.
+
+- **D1 — radial profiles: both readings or the model side first** (horizon
+  §10 Q1, §11): both in one item (recommended — the observable side is two
+  steps once the kind exists, and the frank-style example needs both), or
+  the model side first with `AzimuthalAverage` an S follow-on.
+  **Recommended: both, W8.2 as drafted.**
+- **D2 — the foreign function first, the emulator after its memo** (§10
+  Q2, §11): W8.0 in wave 1 with W8.3 beside it and W8.4 in wave 3
+  (recommended — an Opus item on day one and the memo's three undecided
+  points settled before the L item), or the emulator alone first.
+  **Recommended: both, W8.0 first.**
+- **D3 — the flagship's staging**: W8.9 as drafted (one disc → the 133 as
+  a population with the regression hyperprior → the localisation
+  reported), the data from the paper's repository at a pinned commit and
+  the model ported — Peter's answer of 2026-10-06 — with the one open
+  check (whether W7.0's grammar admits a buffer symbol for the regression
+  hyperprior; if not, a §4 question for the item). Or stage 1 alone this
+  phase. **Recommended: as drafted; SAGE with GRAMS stays Phase 9's
+  amortised-SBI flagship.**
+- **D4 — the readers' order**: IRS first (W8.10 — half a session, closes
+  the W6.13 C1 gap and PR #82's question), then the photometry reader
+  with the filter library (W8.5 — the larger half, #64), specutils
+  (W8.11), the uv table (W8.12 — pulled earlier if W8.2's ALMA example
+  wants it). Or the memo's order (photometry first). **Recommended: IRS
+  first, then the memo's order; W8.12 timed to W8.2.**
+- **D5 — the model zoo's home**: `ampere.models` is **unavailable** — it
+  is a legacy alias name kept indefinitely (Phase 6 D1 (b)). The
+  recommendation is therefore **no new namespace**: the promoted models
+  live where the shipped ones do (`ampere/core` and the backends) and are
+  exported from the observable front doors (`ampere.spectroscopy` for the
+  dust and star-disc models, `ampere.photometry` for the blackbody
+  variants, `ampere.interferometry` for the disc models), the gallery page
+  the index. The alternative is a fresh name (`ampere.zoo`, `ampere.catalogue`)
+  that no legacy alias claims. **Recommended: the front doors.**
+- **D6 — the release at the phase's close**: `1.0.0b3` (recommended — the
+  train per phase, as D3 of Phase 6 set it), or `1.0.0rc1` with the
+  deprecations removed (which would make this the phase that fixes
+  `1.0.0`'s criteria — horizon §8's list — rather than Phase 10). Also:
+  is `1.0.0b3` the last beta? **Recommended: `1.0.0b3`; `1.0.0`'s criteria
+  ruled at Phase 9's drafting with the JOSS question (D12).**
+- **D7 — the large-N solver on an accelerator**: W8.7 as drafted (EFGP
+  promoted to torch and jax, the four-solver table measured on the
+  cluster — recommended, now that W7.10's cluster run supplies the scan's
+  first GPU numbers), or HSGP alone documented as the accelerator route
+  and EFGP left a prototype. **Recommended: the item.**
+- **D8 — `compare`'s scope**: the Bayes-factor table, bridge sampling and
+  Savage–Dickey in numpy with no new dependency, BMA on top, and the
+  learnt harmonic mean behind a `compare` extra (recommended), or the
+  first three alone. **Recommended: all five, `harmonic` behind the
+  extra.**
+- **D9 — the open v1 issues** (`gh issue list`: #73 dependency injection,
+  #68 getters and setters, #67 low-level optimisations, #29 optimised
+  covariance matrices, #12 spectral resampling, #3 data storage — all
+  superseded by the v2 redesign; #61 corner/lnprob/walkers for many
+  parameters — the corner paging exists; #65, #21–#23 RT codes, Cloudy,
+  LIME — user-side adapters once W8.0/W8.4 land; #44 opacity wavelength
+  range, #45 plot style, #15 CANFAR, #11 censored data — on hold or done
+  by `Censoring`; #40, #41, #14 — the D10 comments): the orchestrator
+  posts a one-line pointer per issue and closes those superseded, on
+  Peter's word per issue or as a batch; W8.13 drafts the pointers.
+  **Recommended: close the superseded ones as a batch with pointers to
+  the v2 pages; keep #44, #45, #15 open with a "v2: see …" comment; #65
+  and #21–#23 closed when W8.0 merges.**
+- **D10 — PR #82** (a 34 KB CASSIS IRS FITS file into `examples/star_disc/`):
+  ground rule 7 bars binary artefacts, but `tests/data` carries small
+  public files with provenance by ruling (W6.12, W7.3). **Recommended:**
+  take the file through the `tests/data` pattern — W8.10 moves it there
+  with its provenance row (IRSA/CASSIS archive product, the pinned URL,
+  the SHA-256) and the twin reads it from there; PR #82 closed with
+  thanks and the pointer once W8.10 merges (or merged as-is first and
+  tidied by W8.10, if Peter prefers the contributor's commit to land).
+  The alternative is download-and-cache with no vendored copy.
+- **D11 — the filter-library bundle**: `ampere_allfilters.hd5` (45 MB in
+  the wheel) kept one release as a fallback behind a loud warning once
+  W8.5's SVO library lands, then dropped at `1.0.0b3` (recommended — the
+  wheel loses most of its 12 MB and #64 closes), or
+  kept indefinitely. **Recommended: one release's grace, then dropped.**
+- **D12 — a software paper, and what the docs items follow**: if a JOSS
+  (or journal) paper accompanies `1.0.0`, the cookbook and gallery move
+  up (the gallery is W8.8's already; the cookbook would be a Phase 8
+  filler) and the declarative problem file becomes worth doing for the
+  reproducibility claim; if not, they stay Phase 9–10 fillers.
+  **Recommended: decide at Phase 9's drafting; W8.8's gallery lands
+  either way.**
+
 ## Status
 
 | Item | Status |

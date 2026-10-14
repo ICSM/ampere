@@ -1205,7 +1205,59 @@ modalities still on paper, the package and the release train, and a shape
 for Phases 8–10 with questions for Peter. It folds into this section when
 he rules on it.
 
-Dependencies: 0 → 1 → 2 → {3, 4} → 5 → 6 → 7, with 3 and 4 parallelisable
+### Phase 8 — Any model, any data: the foreign function, the radial profile, the readers
+*(Drafted as agent-sized items 2026-10-15 — `WORK_ITEMS.md`'s Phase 8 section, W8.0–W8.15 with decisions D1–D12 for Peter; **awaiting his ruling**. The sources are `docs/design/horizon_beyond_phase7.md` (§2, §3, §5, §6, §8, §9, §11, §12) re-ranked by `docs/design/user_journeys_memo.md` (§4 (2), §5, §6, §8.1, §8.1a) and Peter's rulings of 2026-10-06; the bullets below are the source the items execute once ruled.)*
+- **Any model** (horizon §2; user-journeys §4 (2)): `ForeignModel` on torch
+  and jax (W8.0 — a host callable inside a traced computation through
+  `pure_callback` and `autograd.Function`, `DIFFERENTIABLE = False` so the
+  capability ladder refuses NUTS by name while every gradient-free engine,
+  the batched path and the GP likelihood on the accelerator work; an
+  optional Jacobian; `lowering.md` §8's opt-in named; the first §4
+  addition of the phase), `NumpyroEngine(method=)` with `sa`, `nested`
+  and `barker` (W8.1 — the gradient-free kernel a foreign model runs
+  under; jaxns through numpyro's wrapper), the emulator memo as Fable's own
+  work (W8.3 — the training-set-to-model contract, the
+  coordinate-conditioned decoder, **the emulator's own error as a noise
+  component**) and `EmulatedModel` with `train_emulator` after it (W8.4 —
+  the carbon star emulated and fitted with NUTS beside its SBI fit).
+- **Azimuthal symmetry** (horizon §3; required for papers planned soon,
+  Peter 2026-10-06): the `RadialProfile` kind, `Deproject`,
+  `HankelTransform`, `Render` and `AzimuthalAverage`, four profile models
+  including the latent-GP `LatentProfile`, the disc example on real data
+  with a GP correction in `r` (W8.2 — the second §4 addition; `Deproject`
+  and the ring parameters the first `Derived` customers outside the W6.11
+  memo).
+- **The readers** (horizon §5, by W6.12's pattern): catalogue photometry
+  with the `FilterLibrary` from SVO that closes #64 and the
+  `ampere.photometry` front door (W8.5), Spitzer IRS/CASSIS with the
+  star-disc twin's real spectrum (W8.10 — PR #82's file through the
+  `tests/data` pattern), `from_specutils` (W8.11), the uv table (W8.12).
+- **The solver table** (horizon §12): `EquispacedFourierGP` promoted to
+  torch and jax and the four-solver value-and-gradient table measured on
+  the cluster's GPU, deciding `solvers.rst`'s "Which solver, by data shape
+  and device" (W8.7 — the third §4 addition; W7.10's cluster run its
+  first number).
+- **Model comparison** (horizon §6.1; the one must-have the walkthroughs
+  found missing): `ampere.results.compare` — the Bayes-factor table,
+  bridge sampling, Savage–Dickey, model averaging, the learnt harmonic
+  mean behind an extra (W8.6).
+- **The package**: the examples' models promoted with native twins,
+  conformance rows and a gallery page (W8.8 — the home ruled at D5;
+  `ampere.models` is a legacy alias and unavailable); the debris-disc
+  flagship staged — one disc, then 133 as a population with the
+  regression hyperprior — from the paper's public repository at a pinned
+  commit, the model ported (W8.9); the persona-C walkthrough through SBI
+  and the emulator (W8.14); Phase 7's carried list and the issue triage
+  (W8.13); **`1.0.0b3`** at the close (W8.15).
+- **Deferred by the horizon memo's shape, recorded here**: nested
+  populations and hierarchical SBI, the columnar store and population
+  inference at scale, the catalogue loop, the IFU cube, SAGE with GRAMS as
+  the amortised-SBI flagship (Phase 9); approximate-inference correction,
+  pocoMC, the noise-model selection study, the declarative problem file,
+  the cookbook, conda-forge, `1.0.0`'s criteria and the software-paper
+  question (Phase 10, or earlier on D12).
+
+Dependencies: 0 → 1 → 2 → {3, 4} → 5 → 6 → 7 → 8, with 3 and 4 parallelisable
 and the CI/CD workstream running alongside every phase.
 
 ## 6. Deferred implementation choices
