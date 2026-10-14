@@ -3,10 +3,10 @@
 Reproduces ``plot_gp_localisation(gp_localisation(run, problem))`` on the
 one-temperature ladder fitted under the flexible likelihood
 (``examples/line_fluxes``, arm ``"flexible"``), at the study's per-PR emcee
-budget (``study.CI_BUDGET``: about fifteen seconds), so the documentation
-build stays well inside its minute. The conditioned GP mean is the residual
-the missing hot component leaves: largest at the high-excitation,
-short-wavelength lines and falling smoothly along the ladder.
+budget (``study.CI_BUDGET``: about twelve seconds), so the documentation
+build stays well inside its minute. The conditioned GP mean is largest at the
+high-excitation [Ar II] 6.99 line, where the missing hot component contributes
+most.
 """
 
 # ruff: noqa: E402

@@ -280,10 +280,19 @@ highest-excitation lines. NUTS on torch and jax runs the same flexible arm
 (``heavy`` rows).
 
 .. plot:: plots/line_fluxes.py
+   :alt: The conditioned Gaussian-process mean of the one-temperature ladder's
+      fit under the flexible likelihood, plotted against rest wavelength from 7
+      to 26 microns at the ten transitions, with its 68 per cent band. It is
+      largest at the shortest-wavelength line, [Ar II] 6.99, at about
+      0.75e-16 W per square metre, drops to near zero between 10 and 14
+      microns, and sits at a smaller positive offset of 0.2 to 0.4e-16 across
+      the long-wavelength lines.
 
-   The flexible arm's GP localisation along rest wavelength: the residual
-   the missing hot component leaves is largest at the high-excitation lines
-   and falls along the ladder.
+   The flexible arm's GP localisation along rest wavelength (seed 20261014):
+   the residual the missing hot component leaves is largest at the
+   high-excitation [Ar II] line; the smaller offset at long wavelengths is
+   the other half of the one-temperature compromise, a slightly warm
+   temperature and a low column under-predicting the cool lines.
 
 9. What the template did not say
 ---------------------------------
