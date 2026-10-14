@@ -426,6 +426,7 @@ class ReferenceBackend:
         # W5.5: likewise the only backend with a gridded-image vocabulary
         # until the torch and jax fixtures declare their own twins below.
         image=True,
+        line_fluxes=True,  # W7.9
     )
 
     def model(self, spec: ModelSpec) -> Model:
@@ -492,6 +493,10 @@ class ReferenceBackend:
     def to_numpy(self, values: Any) -> np.ndarray:
         return np.asarray(values)
 
+    def line_fluxes(self) -> LineFluxPieces:
+        # W7.9 -- appended.
+        return REFERENCE_LINE_FLUXES
+
 
 #: The shipped astrometric vocabulary, as one record (W4.9). Module-level so
 #: that :class:`MirrorBackend` can say which of it is its own.
@@ -523,3 +528,13 @@ REFERENCE_INTERFEROMETRY = InterferometryPieces(
     binary_visibilities=BinaryVisibilities,
     squared_amplitude=SquaredAmplitude,
 )
+
+
+# W7.9 -- appended at the end so a neighbouring item's edits merge cleanly.
+from ampere.backends.reference import LineIntegration  # noqa: E402
+
+from ..protocol import LineFluxPieces  # noqa: E402
+
+#: The shipped line-flux vocabulary, as one record (W7.9). Module-level so
+#: that :class:`MirrorBackend` can say which of it is its own.
+REFERENCE_LINE_FLUXES = LineFluxPieces(line_integration=LineIntegration)

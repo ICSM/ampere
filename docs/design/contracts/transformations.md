@@ -1023,6 +1023,7 @@ core is the vocabulary, not the library.
 | Epoch sampling | `TimeSeries` → `TimeSeries` | none | `points` at the observed epochs |
 | Fourier sampling | `Image` → `VisibilitySet` | none | `intervals` on `x`/`y` from the field of view, `max_step` from the longest baseline |
 | Response matrix (RMF/ARF) | `Spectrum` → `Spectrum` | usually none (the matrix is a buffer); a fitted gain or livetime is an ordinary parameter, and the matrix is then rebuilt inside `apply` | `points` at the matrix's own tabulated energies |
+| Line integration | `Spectrum` → `LineFluxes` | none (the windows are buffers) | `points` at its own tabulation |
 
 *(Amended W4.8: this section's title says "implementations in Phase 2", and
 most of the table did land there — but the row order above is no longer one
@@ -1038,6 +1039,19 @@ closed at W4.1; epoch sampling landed at W4.9 in each backend's
 `astrometry.py`. One name per standard
 transformation, one module per observable, no grouping namespace — D1's
 ruling, `architecture.md` §3.)*
+
+*(Amended W7.9: the line-integration row is new, and it lives in each
+backend's `instrument.py` beside synthetic photometry, whose shape it shares —
+a fixed influence matrix built once from buffers, published as `points=` at
+its own tabulation (the union of one evenly spaced grid per line's window) and
+placed by `Axis.locate`, so the second rule below applies to it word for word.
+It integrates ∫(F_ν − C_ν) dν over each window in W m⁻² from a model in Jy on
+a micron grid; the continuum C_ν is declared — `"none"`, or `"linear"`
+through the model's own values at the window's edges — and is linear in the
+samples, which is what keeps the whole step one matrix. Its coordinates come
+from the observed `LineFluxes` through `from_observed`, the first rule's
+route. Overlapping windows are refused: a sample in two windows would have
+two owners.)*
 
 Two of them are worth a note. A **response matrix is a matrix multiply**, so
 X-ray forward folding is an ordinary `Transformation` and needs nothing special
@@ -1071,7 +1085,7 @@ general form of the instruction `likelihoods.md` §16 gives resampling steps
 
 A second rule applies to every step in this table whose buffer is tied to
 specific `points=` — synthetic photometry and the RMF/ARF response matrix,
-which share exactly this shape (*added post-freeze with W2.1; approved
+which share exactly this shape (and line integration, *Amended W7.9*) (*added post-freeze with W2.1; approved
 2026-09-03, `spectrum_photometry.md` Gap 1, decision-log entry in
 `DEVELOPMENT_PLAN.md` §2*). Such a step **must** recover its own coordinates
 from the container with `Axis.locate` rather than assume positional alignment:

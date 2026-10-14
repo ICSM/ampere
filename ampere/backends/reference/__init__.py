@@ -87,6 +87,7 @@ from .image import (
 from .instrument import (
     DETECTORS,
     CalibrationScale,
+    LineIntegration,
     LSFConvolution,
     Resample,
     SyntheticPhotometry,
@@ -142,6 +143,7 @@ __all__ = [
     "GaussianSource",
     "GaussianSourceVisibilities",
     "LSFConvolution",
+    "LineIntegration",
     "ModifiedBlackBody",
     "PSFConvolution",
     "PowerLaw",
