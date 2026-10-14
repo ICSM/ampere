@@ -205,6 +205,17 @@ Unreleased
   provenance records which one computed the numbers (``library`` and
   ``provider`` in the solver's configuration); the answers agree to rounding.
 
+* **Tie, independent or population, measured.** ``examples/m2_populations``
+  runs milestone M2's pattern over eight spectra — the sharp line injected in
+  three, one clean member at five times the noise — with the GP amplitudes
+  declared independent, tied, or as the non-centred population over
+  ``d*.likelihood``, and ``tests/m2/test_populations.py`` pins what it
+  finds: the population keeps the deviated spectra honest and localised,
+  recovers the amplitudes' spread, narrows the poorly constrained member's
+  amplitude without shrinking the deviated ones, and is calibrated under
+  SBC. :doc:`population` says which declaration to use when, with the
+  measured table.
+
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
 

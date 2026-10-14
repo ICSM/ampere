@@ -337,6 +337,169 @@ shape and unit. A dataset named *without* a path is refused, the message
 naming ``within=`` as the remedy, and a path that does not resolve is refused
 naming the components available at that level.
 
+Tie, independent or population: measured on the M2 pattern
+-------------------------------------------------------------
+
+A survey fitted with the flexible likelihood has one GP amplitude per spectrum,
+and three ways to declare them. **W7.2** measured all three on milestone M2's
+own pattern (:doc:`m2_misspecification`): eight spectra of the M2 toy, one
+object class at distinct noise seeds, the ``strong_sharp`` line — a 12 %
+emission line the model has no term for — injected in three of them (``d1``,
+``d4``, ``d6``), and one clean member, ``d7``, observed at five times the
+noise, so that its own data barely constrain its amplitude. The scenario,
+the three arms and the driver are ``examples/m2_populations``; the rows that
+pin the numbers below are ``tests/m2/test_populations.py``.
+
+.. plot:: plots/m2_populations.py
+   :alt: Eight noisy residual traces against wavelength from 0.842 to 0.872
+      microns, stacked one above the other and labelled d0 to d7. Five are
+      flat noise at about 0.01 Jy; three, d1, d4 and d6, carry a narrow
+      emission bump of about 0.12 Jy at 0.863 microns, marked by a dotted
+      line; d7 is flat but about five times noisier than the others.
+
+   The collection the three declarations are fitted to: each spectrum's
+   departure from the undeviated truth, offset. Red, the three deviated
+   members (the dotted line is the injected line's centre); orange, the clean
+   member at five times the noise.
+
+The three declarations, over the same eight datasets ``d0`` … ``d7``, each
+carrying the study's flexible likelihood (``amplitude ~ HalfNormal(0.3 Jy)``,
+``length_scale ~ HalfNormal(0.003 µm)``):
+
+.. code-block:: python
+
+    import astropy.units as u
+    import scipy.stats as st
+    from ampere.core import DatasetCollection, Derived, FittingProblem, Parameter, Tie
+
+    # Independent: each dataset keeps its own amplitude prior. Nothing to declare.
+    independent = FittingProblem(models, datasets)
+
+    # Tied: one amplitude for all eight.
+    tied = FittingProblem(models, datasets, ties=[
+        Tie("amplitude", [f"{d.label}.likelihood.amplitude" for d in datasets]),
+    ])
+
+    # Population, non-centred: z internal, the amplitude derived and routed by
+    # element to each dataset's likelihood.amplitude.
+    collection = DatasetCollection.plate(
+        "gp", datasets, within="likelihood",
+        members=[
+            Parameter("z", st.norm(0.0, 1.0)),
+            Parameter("amplitude", Derived("exp(mu + sigma * z)"), unit=u.Jy),
+        ],
+        hyperpriors=[Parameter("mu", st.norm(-3.0, 2.0)),
+                     Parameter("sigma", st.halfnorm(0.0, 1.0))],
+    )
+    population = FittingProblem(models, collection)
+
+The derived member carries the unit of the leaf it replaces: the study's
+kernel declares its amplitude in Jy, and a member in no unit is refused
+against it rather than silently converted.
+
+**Tie** — one amplitude everywhere — says the eight spectra are equally
+misspecified. That is never the right model for a misspecification that
+differs from object to object, and here it visibly is not: the tied amplitude
+settles between the deviated members' needs and the clean members' and is
+wrong for both — smaller than any deviated spectrum's own amplitude, and five
+to fifteen times what a clean one needs on its own (the pinned row:
+``TIED_INFLATION_FACTOR``). Its effect on the deviated spectra's parameters
+had the same sign at all three seeds measured — slightly worse than the
+population's — but by less than the sampler's own scatter, so the page does
+not claim it. Use a tie for a nuisance the *instrument* shares (one calibration
+error common to every exposure), not for one the objects do not.
+
+**Independent** — the status quo — is right when every spectrum constrains its
+own amplitude: the deviated spectra here do, and their amplitudes are the same
+under the independent arm and the population to within about five per cent. It
+costs nothing to declare and nothing in calibration.
+
+**Population** is right when some members do not constrain their own
+amplitude and the members are one class: the poorly constrained member
+borrows the population's information about what a clean spectrum's amplitude
+looks like, and its amplitude posterior narrows, while the deviated members —
+whose data speak — are not pulled down. The spread ``sigma`` is fitted, so the
+population decides from the data how alike the members are. Declare it
+non-centred, as above: NUTS samples ``(mu, sigma, z)`` without a funnel, and
+the form sidesteps torch's refusal of a hierarchical ``lognorm`` (the caveat
+in the previous section).
+
+The measured table — NUTS on jax at the study's
+``TEST_NUTS``-sized budget (``POPULATION_NUTS``: 400 draws after 400 warm-up,
+two chains), 200 points per spectrum, the study's run seed, spectrum *i* at
+data seed ``42 + i``:
+
+.. list-table:: The three declarations on eight spectra (jax, ``POPULATION_NUTS``, data seed 42)
+   :header-rows: 1
+   :widths: 40 20 20 20
+
+   * -
+     - independent
+     - tied
+     - population
+   * - worst bias, deviated spectra (widths)
+     - 0.84
+     - 1.13
+     - 0.93
+   * - worst bias, clean spectra (widths)
+     - 1.76
+     - 1.68
+     - 1.87
+   * - amplitude, deviated spectra (Jy)
+     - 0.019–0.021
+     - 0.016 (all)
+     - 0.018–0.020
+   * - amplitude, clean spectra at 1 % (Jy)
+     - 0.0010–0.0017
+     - 0.016 (all)
+     - 0.0008–0.0012
+   * - ``d7``'s amplitude, median ± 68 % half-width (Jy)
+     - 0.012 ± 0.008
+     - 0.016 ± 0.001
+     - 0.0036 ± 0.005
+   * - wall time, one arm
+     - 210 s
+     - 78 s
+     - 250 s
+
+"Worst bias" is the largest ``|median - truth|`` over each spectrum's four
+model parameters, in posterior widths, maximised over the group — M2's own
+statistic. On the clean spectra all three arms reach about the same numbers,
+because they are the noise realisations' and not the declaration's: with
+thirty-two parameters in play the largest offset of a calibrated posterior is
+itself about two widths. The population's other measurements, at the same run:
+
+* **The spread.** ``gp.sigma`` has median 1.61 and central 95 % [0.95, 2.80];
+  the sample spread of the members' log-amplitudes — taking each member's
+  amplitude to be its independent-arm posterior median, the mapping from "this
+  spectrum carries this deviation" to "this is the amplitude a Matérn-3/2
+  needs to absorb it" (about 0.02 Jy for the line, 0.001 Jy for a clean
+  spectrum) — is 1.33, inside it.
+* **The shrinkage.** ``d7``'s amplitude half-width is 1.45 times narrower under
+  the population (1.60 and 1.72 at data seeds 142 and 242); the pinned factor
+  is 1.3. The deviated members' amplitudes are not pulled down with it: their
+  smallest median is 0.0176 Jy over the three seeds, against a pinned floor of
+  0.011.
+* **Localisation.** On every deviated spectrum the GP localisation score peaks
+  within 0.7 grid spacings of the injected line, at 11–14 posterior standard
+  deviations; no clean spectrum exceeds 0.9.
+* **Calibration.** SBC over ten refits of the population arm (four spectra at
+  100 points, one deviated, one at five times the noise; the simulated
+  deviation is each member's GP realisation at its population-drawn
+  amplitude): the central 90 % intervals of ``gp.mu`` and ``gp.sigma`` both
+  covered the truth 8 times in 10, with uniformity p-values 0.53 and 0.83. The
+  independent arm on the same replicas covered the per-member amplitudes as
+  often (0.7–0.9) — it is not miscalibrated, only less informed.
+
+``python -m examples.m2_populations --backend jax --quick`` prints the same
+table; the shrinkage factor and the bias bounds are pinned in
+``tests/m2/test_populations.py`` over three data seeds (spectrum 0 at 42, 142
+and 242) with the study's margin convention. The reference path's emcee, at
+the marked budget (``pytest -m m2_full``; 112 walkers x 1 600 steps, forty
+minutes for two arms), reproduces the shrinkage (1.92) and the floor but had
+not converged on the rest — fifty dimensions is past what an ensemble sampler
+explores at that cost — which is why the rows above are NUTS'.
+
 Simulation-based calibration on a population
 -------------------------------------------------
 
