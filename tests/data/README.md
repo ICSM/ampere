@@ -28,3 +28,28 @@ was confirmed by Peter Scicluna at the W6.12 dispatch (2026-10-05).
 **Verifying.** `sha256sum tests/data/contest-2008-binary.oifits` must print
 the checksum above; the test checks it too, on the vendored copy and on a
 downloaded one.
+
+## `jw01536-o027_t008_miri_p750l_x1d.fits`
+
+| | |
+|---|---|
+| What | A JWST MIRI low-resolution-spectrometer fixed-slit spectrum (`EXP_TYPE` `MIR_LRS-FIXEDSLIT`, detector `MIRIMAGE`, prism `P750L`) of the A-type flux standard BD+60 1753: programme 1536 (an absolute-flux-calibration programme, public with no exclusive-access period), observation 027, visit 001, observed 2022-07-08; the level-3 (`calwebb_spec3`) `x1d` product, calibrated with pipeline `CAL_VER` 3.0.0 and context `jwst_1584.pmap`. One `EXTRACT1D` table (`SRCTYPE` `POINT`, `SLTNAME` `MIR_LRS-FIXEDSLIT`) of 388 rows, 3.34–14.02 µm, written from long to short wavelength; `WAVELENGTH` in µm, `FLUX`/`FLUX_ERROR` in Jy, `SURF_BRIGHT`/`SB_ERROR` in MJy/sr; and the pipeline's `ASDF` extension. |
+| Size | 195 840 bytes |
+| SHA-256 | `16407b30bbf4bf86837e894cc39b702bf17207a0b7ca7bd56c26d7f23efba886` |
+| Pinned URL | <https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:JWST/product/jw01536-o027_t008_miri_p750l_x1d.fits> (MAST's portal download, no token needed) |
+| Known truth | The file's own structure: the first and last rows are padding (`DQ` = 1, `DO_NOT_USE`; a `NaN` flux; a zero uncertainty), the last repeating the wavelength of the row before it, and no other `DQ` bit is set; the flux falls from about 32 mJy at 3.3 µm to about 3.5 mJy at 14 µm, the Rayleigh–Jeans tail of an A star. |
+| Read by | `tests/spectroscopy/test_jwst.py` (W7.3) |
+
+**Redistribution basis.** JWST data are produced by NASA, ESA and CSA and
+served by MAST at STScI; once a programme's exclusive-access period lapses
+(calibration programmes have none) they are public. MAST's data-use policy
+(<https://archive.stsci.edu/publishing/data-use>) states that "most data hosted
+at MAST are in the public domain … and therefore do not have restrictions on
+use", the copyrighted exceptions being the Digitized Sky Survey and the Guide
+Star Catalogs, not JWST; it asks only that publications acknowledge the
+mission and STScI. Vendoring a product under a megabyte was confirmed by Peter
+Scicluna at the W7.3 dispatch (2026-10-09).
+
+**Verifying.** `sha256sum tests/data/jw01536-o027_t008_miri_p750l_x1d.fits`
+must print the checksum above; the test checks it too, on the vendored copy and
+on a downloaded one.

@@ -103,6 +103,9 @@ old/
 *.0
 *.hdf5
 *.fits
+# ...but not the small public files tests read, each with its provenance in
+# tests/data/README.md (W7.3; the legacy pattern above stays for run outputs).
+!tests/data/*.fits
 ampere/utils/ALMA/ALMA.B1.csv
 ampere/utils/ALMA/ALMA.B10.csv
 ampere/utils/ALMA/ALMA.B3.csv
