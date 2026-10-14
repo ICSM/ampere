@@ -377,3 +377,58 @@ class TestTheWrongFormat:
     def test_a_missing_path(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError, match=r"no JWST file at .*nowhere\.fits"):
             read_jwst(tmp_path / "nowhere.fits")
+
+
+# ---------------------------------------------------------------------------
+# The fit: the photometry_spectra page's front-door block, at a token budget
+# ---------------------------------------------------------------------------
+
+#: emcee's floor is twice the four free parameters; a token budget, since the
+#: row asserts that the reader's Spectrum composes and fits, not what it finds.
+RUN_WALKERS, RUN_STEPS, RUN_BURN_IN = 16, 8, 2
+
+
+class TestTheFit:
+    def test_the_spectrum_fits_end_to_end_with_the_flexible_likelihood(self, sample: Path) -> None:
+        # The block docs/source/photometry_spectra.rst shows.
+        import scipy.stats as st
+
+        from ampere.backends.reference import PowerLaw
+        from ampere.core import Dataset, FittingProblem, GaussianProcessNoise, Instrument
+        from ampere.core import Likelihood, Matern32
+        from ampere.inference import EmceeEngine
+        from ampere.spectroscopy import GaussianFamily, LSFConvolution, Resample, read_jwst
+
+        spectrum = read_jwst(sample)
+        model = PowerLaw(
+            np.geomspace(3.0, 15.0, 400),
+            norm=st.loguniform(1e-3, 1e-1),
+            index=st.uniform(-4.0, 4.0),
+            reference_wavelength=7.5,
+        )
+        instrument = Instrument(
+            [LSFConvolution(resolving_power=100.0), Resample(spectrum.spectral_axis.values)]
+        )
+        kernel = Matern32(
+            st.loguniform(1e-5, 1e-2),
+            st.loguniform(0.1, 10.0),
+            amplitude_unit=u.Jy,
+            length_scale_unit=u.um,
+        )
+        likelihood = Likelihood(GaussianFamily(), GaussianProcessNoise(kernel))
+        problem = FittingProblem(model, {"miri": Dataset(spectrum, instrument, likelihood)})
+        # initial="prior" skips the default optimiser warm start (some forty
+        # seconds here): the one departure from the page's block, for budget.
+        engine = EmceeEngine(problem, walkers=RUN_WALKERS)
+        run = engine.run(RUN_STEPS, burn_in=RUN_BURN_IN, initial="prior")
+
+        posterior = run["posterior"].dataset
+        assert set(posterior.data_vars) == {
+            "model.norm",
+            "model.index",
+            "miri.likelihood.amplitude",
+            "miri.likelihood.length_scale",
+        }
+        assert posterior.sizes["chain"] == RUN_WALKERS
+        assert posterior.sizes["draw"] == RUN_STEPS - RUN_BURN_IN
+        assert all(np.all(np.isfinite(posterior[name].values)) for name in posterior.data_vars)

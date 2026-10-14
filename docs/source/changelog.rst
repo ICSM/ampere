@@ -173,6 +173,14 @@ Unreleased
   run's provenance as ``ampere_populations`` (provenance schema 12). A
   dataset named in ``over`` without a path is still refused, now with this
   form as the remedy. See :doc:`population`.
+* **Read JWST spectra.** :func:`ampere.spectroscopy.read_jwst` turns a JWST
+  pipeline ``x1d`` or ``c1d`` product into a :class:`~ampere.core.Spectrum` —
+  the axis in micron, the flux in the file's own unit, the pipeline's
+  ``DO_NOT_USE`` bit as the mask, the instrument, exposure and pipeline
+  version in ``meta`` — and refuses a file holding several spectra unless
+  ``source=`` or ``extension=`` says which. The new :mod:`ampere.spectroscopy`
+  is the one place to import spectra, photometry and their instrument steps
+  from. See :ref:`photometry-spectra-jwst`.
 
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
@@ -228,8 +236,10 @@ What you can fit
 Data arrive as plain arrays in containers (:class:`~ampere.core.Spectrum`,
 :class:`~ampere.core.Image`, :class:`~ampere.core.VisibilitySet`,
 :class:`~ampere.core.TimeSeries`) indexed by their coordinates, with masks
-for missing values and no assumption of a regular grid. There are no file
-readers yet (see the limitations below).
+for missing values and no assumption of a regular grid. This beta shipped no
+file readers; two have landed since (see Unreleased): OIFITS for
+interferometry, behind :mod:`ampere.interferometry`, and the JWST pipeline's
+one-dimensional ``x1d``/``c1d`` spectra, behind :mod:`ampere.spectroscopy`.
 
 The flexible likelihood
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -367,9 +377,12 @@ Known limitations at the beta
   CPU lowerings alone — on an accelerator it refuses by name, and ``DenseGP``
   or ``HilbertSpaceGP`` is the solver to use there. The torch quasiseparable
   solver has no such limit.
-* **No file readers yet.** Observations are built from arrays you read
-  yourself; an OIFITS reader for interferometric data is planned after the
-  beta.
+* **No file readers in this beta.** Observations were built from arrays you
+  read yourself. Two readers have landed since (see Unreleased):
+  :func:`~ampere.interferometry.read_oifits` for OIFITS and
+  :func:`~ampere.spectroscopy.read_jwst` for JWST ``x1d``/``c1d`` spectra,
+  each behind its observable's front door, :mod:`ampere.interferometry` and
+  :mod:`ampere.spectroscopy`.
 
 Deprecations
 ~~~~~~~~~~~~

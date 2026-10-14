@@ -282,6 +282,111 @@ statistic. Starting near a good point is ordinary MCMC practice; on a
 synthetic problem the truth is that point, and on real data it is a
 preliminary optimum — the warm start Phase 6's optimisers module is for.
 
+.. _photometry-spectra-jwst:
+
+Reading a JWST spectrum: the front door
+-----------------------------------------
+
+Everything above starts from synthetic arrays. A real spectrum starts from a
+file, and for JWST that file is the pipeline's one-dimensional product: an
+``x1d`` (one ``EXTRACT1D`` table per extracted source or slit) or a ``c1d``
+(one ``COMBINE1D`` table per combined source).
+:func:`~ampere.spectroscopy.read_jwst` reads one table into a
+:class:`~ampere.core.Spectrum` in one line, and :mod:`ampere.spectroscopy` is
+the front door it lives behind — the kinds, the families, the reference
+instrument steps and the reader in one import, in the shape
+:mod:`ampere.interferometry` set for interferometry (:doc:`interferometry`
+§10). ``import ampere`` does not import it.
+
+.. code-block:: python
+
+    from ampere.spectroscopy import read_jwst
+
+    spectrum = read_jwst("tests/data/jw01536-o027_t008_miri_p750l_x1d.fits")
+
+The file is the test suite's own: a MIRI low-resolution-spectrometer
+fixed-slit spectrum of the flux standard BD+60 1753 from calibration
+programme 1536, 196 kB, public domain (``tests/data/README.md`` has its
+provenance). What the reader did with it is in ``spectrum.meta``:
+
+* **where it came from** — ``instrument`` ``"MIRI"``, ``detector``,
+  ``filter`` ``"P750L"``, ``grating`` (``None``: MIRI has none),
+  ``exp_type`` ``"MIR_LRS-FIXEDSLIT"``, ``program``, ``observation``,
+  ``target`` ``"BD+60 1753"``, ``date_obs``, ``pipeline_version`` (the
+  file's ``CAL_VER``, ``"3.0.0"``), and the table read: ``product`` ``"x1d"``,
+  ``extension`` (its ``EXTVER``), ``slit`` and ``srctype`` ``"POINT"``;
+* **what it changed** — the table's 388 rows run from long to short
+  wavelength, so they were reversed (``reordered = "reversed"``); the last row
+  repeats the wavelength of the one before it, and an axis cannot repeat a
+  coordinate, so the padding row of the two was dropped (``n_duplicate = 1``),
+  leaving 387 samples;
+* **what it masked** — ``mask`` is the pipeline's ``DO_NOT_USE`` data-quality
+  bit (``DQ & 1``), together with any non-finite value or uncertainty and any
+  uncertainty that is not positive; ``n_do_not_use``, ``n_nonfinite``,
+  ``n_nonpositive_error`` and ``n_masked`` count them (one padding row here,
+  at the long-wavelength end). The other ``DQ`` bits mask nothing and are kept
+  raw in ``spectrum.extra_coords["dq"]``, beside ``npixels``.
+
+The axis is in micron, as the reference steps take it; the flux is in the
+unit the file declares (Jy here, read from the column's ``TUNIT``, never
+assumed). ``read_jwst(path, surface_brightness=True)`` reads ``SURF_BRIGHT``
+and ``SB_ERROR`` in MJy/sr instead — the quantity to fit for an extended
+source. A file holding several spectra (a NIRSpec fixed-slit exposure writes
+one table per slit) is refused, with every table listed, until ``source=``
+(a slit name such as ``"S200A1"``, or a source id) or ``extension=`` (the
+table's ``EXTVER``) says which; the reader never picks the first for you.
+
+**The line-spread function is yours to give.** The pipeline does not write a
+resolving power into its products, so the reader carries none. Supply the
+mode's resolution to :class:`~ampere.backends.reference.LSFConvolution` from
+the instrument's documentation: today the step takes one constant
+``resolving_power`` (or one ``fwhm``), so take your resolution curve's value
+at the band's centre — about 100 near 7.5 µm for the LRS prism. A
+wavelength-dependent :math:`R(\lambda)` is the step's next extension; the LRS
+curve rises from about 40 at 5 µm to about 160 at 10 µm (the MIRI
+documentation's figures), and
+a fit that cares about line shapes across the band should know that it is
+using one value.
+
+**The fit.** The ``Spectrum`` composes into this page's pattern unchanged — a
+model on a grid covering the band, the instrument chain built on the
+observed axis, and the flexible likelihood:
+
+.. code-block:: python
+
+    import astropy.units as u
+    import numpy as np
+    import scipy.stats as st
+
+    from ampere.backends.reference import PowerLaw
+    from ampere.core import Dataset, FittingProblem, GaussianProcessNoise, Instrument
+    from ampere.core import Likelihood, Matern32
+    from ampere.inference import EmceeEngine
+    from ampere.spectroscopy import GaussianFamily, LSFConvolution, Resample, read_jwst
+
+    spectrum = read_jwst("tests/data/jw01536-o027_t008_miri_p750l_x1d.fits")
+    model = PowerLaw(np.geomspace(3.0, 15.0, 400), norm=st.loguniform(1e-3, 1e-1),
+                     index=st.uniform(-4.0, 4.0), reference_wavelength=7.5)
+    instrument = Instrument([LSFConvolution(resolving_power=100.0),
+                             Resample(spectrum.spectral_axis.values)])
+    kernel = Matern32(st.loguniform(1e-5, 1e-2), st.loguniform(0.1, 10.0),
+                      amplitude_unit=u.Jy, length_scale_unit=u.um)
+    likelihood = Likelihood(GaussianFamily(), GaussianProcessNoise(kernel))
+    problem = FittingProblem(model, {"miri": Dataset(spectrum, instrument, likelihood)})
+    run = EmceeEngine(problem, walkers=16).run(1000, burn_in=500)
+
+The block is not executed when the documentation builds; it runs as
+``tests/spectroscopy/test_jwst.py::TestTheFit``, at a token budget of eight
+steps and with ``initial="prior"`` in place of the engine's default optimiser
+warm start, since the row asserts that the reader's ``Spectrum`` composes and
+fits, not what the fit finds. The ``model`` and ``instrument`` lines are
+this page's example with one spectrograph and no photometry. A power law is a deliberately crude model of a star's
+spectrum — the Rayleigh–Jeans tail of an A star falls about as
+:math:`\lambda^{-2}`, but the calibrated spectrum is not a pure power law
+across a factor of four in wavelength — and the Matérn-3/2 process is what
+absorbs the difference while the index is fitted: the page's theme, on a
+real file.
+
 See also
 ---------
 
@@ -290,6 +395,9 @@ See also
 * :doc:`m2_misspecification` — the flagship misspecification study the same
   flexible likelihood underlies, at three data sizes and on all three
   backends.
+* :mod:`ampere.spectroscopy` — the front door's API page, and
+  :func:`~ampere.spectroscopy.read_jwst`'s full statement of what it reads,
+  masks and refuses.
 * :doc:`astrometry` — another worked example of
   :class:`~ampere.core.GaussianProcessNoise` against an injected systematic,
   on a very different kind of axis (time, not wavelength).
