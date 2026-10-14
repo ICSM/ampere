@@ -14,6 +14,11 @@ $ pixi run conformance          # or: pixi run -e dev python -m pytest tests/con
 Every test in this directory takes the `backend` fixture and runs once per
 registered backend. No test body names a concrete backend, and none may.
 
+The jax column's quasiseparable solver has two recursion providers (W7.10);
+`AMPERE_CONFORMANCE_JAX_PROVIDER` (`auto`, the default, `celerite2` or `scan`),
+read once when the fixture is built, chooses which one it uses. Run the battery twice in the `jax` environment — plainly, and with
+`AMPERE_CONFORMANCE_JAX_PROVIDER=scan` — to put both through every row.
+
 ---
 
 ## 1. Adding a backend

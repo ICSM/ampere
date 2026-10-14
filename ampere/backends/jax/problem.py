@@ -1431,6 +1431,8 @@ class LoweredProblem:
         about a primitive the user never named, at a point that says nothing
         about which part of their problem is at fault. Asking
         :attr:`batchable` first turns it into a sentence naming the solver.
+        Since W7.10 it names the *provider*: ``QuasisepGP(provider="scan")``
+        is pure jax and batches.
         """
         if not self.batchable:
             raise _refuse(
@@ -1438,9 +1440,10 @@ class LoweredProblem:
                 f"this problem declares batchable = False, so its density cannot be vmapped. "
                 f"The flag is aggregated from what every part declares "
                 f"({self.problem.capabilities}), conjunctively, so one part is enough to "
-                f"withdraw it — ampere.backends.jax.QuasisepGP is the one that does, because "
-                f"celerite2's primitives register no jax batching rule. Use DenseGP if the "
-                f"problem is small enough, or evaluate the density in a loop.",
+                f"withdraw it — ampere.backends.jax.QuasisepGP on its celerite2 provider (the "
+                f"CPU default) is the one that does, because celerite2's primitives register no "
+                f"jax batching rule. QuasisepGP(provider='scan') restores batching with ampere's "
+                f"own lax.scan recursions; otherwise evaluate the density in a loop.",
             )
         stacked = jnp.asarray(unconstrained, dtype=jnp.float64)
         if stacked.ndim != 2:
@@ -1507,7 +1510,8 @@ class LoweredProblem:
         Refused, by name, when the problem declares ``batchable = False``. The
         refusal is load-bearing for the same reason
         :meth:`log_prob_unconstrained_batched`'s is: ``celerite2.jax``
-        registers no batching rule for its primitives.
+        registers no batching rule for its primitives (the scan provider,
+        W7.10, does batch).
         """
         if not self.batchable:
             raise _refuse(
@@ -1515,8 +1519,9 @@ class LoweredProblem:
                 f"this problem declares batchable = False, so its forward model cannot be "
                 f"vmapped over a stack of parameter vectors. The flag is aggregated from what "
                 f"every part declares ({self.problem.capabilities}), conjunctively — "
-                f"ampere.backends.jax.QuasisepGP is the one that withdraws it, because "
-                f"celerite2's primitives register no jax batching rule. simulate_many falls "
+                f"ampere.backends.jax.QuasisepGP on its celerite2 provider (the CPU default) "
+                f"is the one that withdraws it, because celerite2's primitives register no jax "
+                f"batching rule; QuasisepGP(provider='scan') restores it. simulate_many falls "
                 f"back to the loop, which is the semantics anyway.",
             )
         stack = jnp.asarray(theta, dtype=jnp.float64)

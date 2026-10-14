@@ -160,7 +160,7 @@ class TestTheDensityAgrees:
     """The same declaration, on two devices, is the same posterior."""
 
     def test_the_realised_density_matches_the_cpu(self) -> None:
-        factory = DenseGP  # QuasisepGP refuses an accelerator by name; see below
+        factory = DenseGP
         on_cpu = lower_problem(_problem(factory, "cpu"))
         on_device = lower_problem(_problem(factory, PLATFORM))
         theta = np.random.default_rng(4).normal(0.0, 0.5, on_cpu.free_size)
@@ -176,16 +176,48 @@ class TestTheDensityAgrees:
         theta = on_cpu.parameters.pack(on_cpu.reference_values)
         assert on_device.log_prob(theta) == pytest.approx(on_cpu.log_prob(theta), rel=1e-9)
 
-    def test_the_quasiseparable_solver_refuses_an_accelerator_by_name(self) -> None:
-        """celerite2.jax lowers its primitives for the CPU alone (W6.18): the
-        refusal names the solver and the way out, instead of an MLIR error
-        about a primitive the user never wrote."""
+    def test_the_quasiseparable_density_matches_the_cpu(self) -> None:
+        """W7.10: the scan provider on the device against celerite2 on the CPU.
+
+        The row W6.18 turned into a refusal, turned back into the agreement
+        row: ``QuasisepGP(device=PLATFORM)`` chooses ampere's own ``lax.scan``
+        recursions (``provider="auto"``), the CPU twin keeps celerite2's
+        compiled kernels, and the two are one posterior at the dense row's
+        tolerance — two recursions, two devices, one answer.
+        """
+        on_cpu = lower_problem(_problem(QuasisepGP, "cpu"))
+        on_device = lower_problem(_problem(QuasisepGP, PLATFORM))
+        theta = np.random.default_rng(4).normal(0.0, 0.5, on_cpu.free_size)
+        expected = float(np.asarray(on_cpu.log_prob_unconstrained(theta)))
+        got = float(np.asarray(on_device.log_prob_unconstrained(theta)))
+        assert got == pytest.approx(expected, rel=1e-9, abs=1e-9)
+
+    def test_the_celerite2_provider_still_refuses_an_accelerator_by_name(self) -> None:
+        """celerite2.jax lowers its primitives for the CPU alone (W6.18): asked
+        for by name off the CPU, the refusal names the provider and the way out,
+        instead of an MLIR error about a primitive the user never wrote."""
         from ampere.core.exceptions import LikelihoodError
 
-        with pytest.raises(LikelihoodError, match="CPU only"):
-            QuasisepGP(device=PLATFORM)
-        # The same declaration on the CPU is what it always was.
-        assert lower_problem(_problem(QuasisepGP, "cpu")).free_size == 4
+        with pytest.raises(LikelihoodError, match=r"CPU only.*provider='scan'"):
+            QuasisepGP(device=PLATFORM, provider="celerite2")
+
+    def test_the_device_chooses_the_scan_provider_and_its_batching(self) -> None:
+        """The device rule's accelerator half, read back where an archive reads it."""
+        solver = QuasisepGP(device=PLATFORM)
+        config = dict(solver.provenance_config())
+        assert config["provider"] == "scan"
+        assert config["library"] == "ampere.jax.scan"
+        assert config["device"] == PLATFORM
+        assert solver.BATCHABLE is True
+
+    def test_the_quasiseparable_density_batches_on_the_device(self) -> None:
+        """``vmap`` over the scan, on the accelerator, equals the loop there."""
+        lowered = lower_problem(_problem(QuasisepGP, PLATFORM))
+        assert lowered.batchable is True
+        stack = np.random.default_rng(6).normal(0.0, 0.5, (4, lowered.free_size))
+        batched = np.asarray(lowered.log_prob_unconstrained_batched(stack))
+        loop = np.array([float(np.asarray(lowered.log_prob_unconstrained(row))) for row in stack])
+        assert batched == pytest.approx(loop, rel=1e-12)
 
 
 class TestTheRefusalsStillHold:

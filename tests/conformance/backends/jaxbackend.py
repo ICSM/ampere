@@ -45,6 +45,7 @@ backend flag now catches too).
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
@@ -483,10 +484,13 @@ class JaxBackend:
         # model and the dense solver is whole-array `jax.numpy`, so
         # `jax.vmap` over the realised density maps as it maps any pure
         # function -- and `LoweredProblem.log_prob_unconstrained_batched` is
-        # the surface. `QuasisepGP` is the one part that still says False
-        # (celerite2 registers no batching rule), which is why this claim is
-        # about `SINGLE` -- the shape the flags row composes -- and why a
-        # quasiseparable problem honestly reports `batchable=False`.
+        # the surface. `QuasisepGP` on its celerite2 provider (the CPU
+        # default) is the one part that still says False (celerite2 registers
+        # no batching rule), which is why this claim is about `SINGLE` -- the
+        # shape the flags row composes -- and why a quasiseparable problem
+        # honestly reports `batchable=False` there. W7.10's scan provider
+        # (`AMPERE_CONFORMANCE_JAX_PROVIDER=scan`) batches, and the rows that
+        # depend on the difference read the problem's flag, not this one.
         batchable=True,
         device="cpu",
         # `configure_x64()` below, and every class raises without it.
@@ -513,7 +517,8 @@ class JaxBackend:
         joint_noise=True,  # W5.9
         # **W5.5**: the native PSF-convolution twin, likewise.
         image=True,
-        # Both, since W2.5 slice 2 chose celerite2.jax for the O(N) solve.
+        # Both, since W2.5 slice 2 chose celerite2.jax for the O(N) solve;
+        # W7.10 added the lax.scan provider behind the same class.
         solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP, SolverKind.HILBERT}),
     )
 
@@ -523,6 +528,11 @@ class JaxBackend:
         # suite the application is the fixture, and constructing it is the
         # first jax work the process does.
         configure_x64()
+        # W7.10: which recursion provider the quasiseparable solver uses on
+        # this column. Read once, at construction, so one battery run means one
+        # provider; `auto` is what a user gets (celerite2 on the CPU), and
+        # `scan` puts ampere's own lax.scan recursions through every row.
+        self.quasisep_provider = os.environ.get("AMPERE_CONFORMANCE_JAX_PROVIDER", "auto")
 
     def model(self, spec: ModelSpec) -> Model:
         return _MODELS[spec.kind](spec)
@@ -547,7 +557,7 @@ class JaxBackend:
         if kind is SolverKind.DENSE:
             return DenseGP()
         if kind is SolverKind.QUASISEP:
-            return QuasisepGP()
+            return QuasisepGP(provider=self.quasisep_provider)
         if kind is SolverKind.HILBERT:
             return HilbertSpaceGP(basis_size=basis_size, boundary_factor=boundary_factor)
         raise NotImplementedError(f"the {BACKEND!r} backend declares no {kind.value} solver.")
