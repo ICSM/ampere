@@ -174,6 +174,17 @@ Unreleased
   dataset named in ``over`` without a path is still refused, now with this
   form as the remedy. See :doc:`population`.
 
+* **Tie, independent or population, measured.** ``examples/m2_populations``
+  runs milestone M2's pattern over eight spectra — the sharp line injected in
+  three, one clean member at five times the noise — with the GP amplitudes
+  declared independent, tied, or as the non-centred population over
+  ``d*.likelihood``, and ``tests/m2/test_populations.py`` pins what it
+  finds: the population keeps the deviated spectra honest and localised,
+  recovers the amplitudes' spread, narrows the poorly constrained member's
+  amplitude without shrinking the deviated ones, and is calibrated under
+  SBC. :doc:`population` says which declaration to use when, with the
+  measured table.
+
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
 
