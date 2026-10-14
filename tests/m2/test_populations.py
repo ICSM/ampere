@@ -41,10 +41,18 @@ about three and a half minutes for all three arms at the study's own
 :data:`~examples.m2_misspecification.study.TEST_NUTS`. So the science rows are
 the **gradient path's**, parametrised over torch and jax as
 ``test_backend_agreement.py``'s are, and marked ``heavy`` (out of
-``test-fast``; ``test-all`` runs them in the torch and jax environments, which
-is where CI's per-push gate runs them). The reference path's emcee is the
-``m2_full`` row, at :data:`~examples.m2_populations.populations.POPULATION_EMCEE`,
-and it reproduces the shrinkage and the floor but had not converged on the
+``test-fast``). **jax is the per-push backend**: ``test-all`` in the jax
+environment runs the science and SBC rows, which is where CI's gate runs
+them (this module 15 passed in 694 s there). The same rows on torch agree
+with jax on every number (the review leg of 2026-10-14: shrinkage 1.69, the
+spread 1.286 in [0.944, 2.730], the line localised at 0.86295 µm on the three
+deviated spectra, deviated amplitudes 0.018-0.021 Jy, the tied amplitude
+0.0164 Jy, coverage 0.8/0.9 with uniformity p-values 0.57-0.66) but cost
+**3 h 31 m for the three-arm fixture and 6 h 23 m for the module** — about
+twenty-three times jax — on a shared 13 GB machine, far beyond CI's twenty-minute torch
+cell, so the torch column sits behind ``-m m2_full`` beside the reference
+path's emcee row (:data:`~examples.m2_populations.populations.POPULATION_EMCEE`),
+which reproduces the shrinkage and the floor but had not converged on the
 rest (its docstring has the numbers).
 The module is one xdist group, so a ``-n`` run builds each fixture once.
 """
@@ -72,7 +80,10 @@ from examples.m2_populations.populations import (
 
 pytestmark = pytest.mark.xdist_group("m2-populations")
 
-NATIVE = ["torch", "jax"]
+#: The gradient path's backends: jax per push, torch behind ``-m m2_full`` (the
+#: module docstring has the measured reason). The mark on the parameter puts
+#: every torch row under ``tests/m2/conftest.py``'s opt-in skip.
+NATIVE = [pytest.param("torch", marks=pytest.mark.m2_full), "jax"]
 
 # ---------------------------------------------------------------------------
 # The pinned margins. Every one is measured at POPULATION_NUTS on jax over three
@@ -228,7 +239,7 @@ class TestTheDeclaration:
 
 
 # ---------------------------------------------------------------------------
-# 2-5. The science (NUTS on torch and jax; heavy)
+# 2-5. The science (NUTS on jax per push, torch behind m2_full; heavy)
 # ---------------------------------------------------------------------------
 
 
@@ -307,7 +318,7 @@ class TestThePopulationOnTheM2Pattern:
 
 
 # ---------------------------------------------------------------------------
-# 6. Calibration (SBC over refits; NUTS on torch and jax; heavy)
+# 6. Calibration (SBC over refits; NUTS on jax per push, torch behind m2_full; heavy)
 # ---------------------------------------------------------------------------
 
 #: The study's SBC thresholds (``test_many_lines_calibration.py``): the nominal
