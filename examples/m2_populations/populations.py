@@ -111,7 +111,9 @@ __all__ = [
     "amplitude_draws",
     "budget_for",
     "build_arm",
+    "calibrate",
     "compare",
+    "coverage_at",
     "dataset_label",
     "generate_population",
     "hyperpriors",
@@ -121,6 +123,7 @@ __all__ = [
     "model_label",
     "physical_summaries",
     "sample_spread",
+    "sbc_problem",
 ]
 
 #: How many spectra the scenario has.
@@ -554,6 +557,144 @@ def compare(
         stored = run(problem, budget, progress=progress)
         fits[arm] = Fit(arm, problem, stored, time.perf_counter() - started)
     return Comparison(data=data, fits=fits, backend=backend, budget=budget, seed=seed)
+
+
+# ---------------------------------------------------------------------------
+# Simulation-based calibration
+# ---------------------------------------------------------------------------
+
+#: The SBC collection: four spectra at 100 points, one deviated and one clean
+#: at five times the noise — the scenario's pattern at half its size, because
+#: every simulation is a full refit and the claim is about coverage over many
+#: refits rather than about one posterior's width (the many-lines SBC's
+#: reasoning for its own smaller ``SIZE``).
+SBC_SPECTRA = 4
+SBC_SIZE = 100
+SBC_DEVIATED: tuple[int, ...] = (1,)
+SBC_POORLY_CONSTRAINED = 3
+
+#: Each refit's NUTS budget: one chain of 250 kept draws, enough for
+#: :data:`RANK_DRAWS`. About twenty to thirty seconds per refit on jax.
+SBC_NUTS = NutsBudget(draws=250, warmup=250, chains=1)
+
+#: Posterior draws each rank is taken against, and the SBC's base seed.
+RANK_DRAWS = 120
+SBC_SEED = 515151
+
+#: The stacked amplitude the independent arm's factory adds to its posterior,
+#: so its per-member amplitudes rank against the simulated ``gp.amplitude``
+#: element by element.
+MEMBER_AMPLITUDE = "member.amplitude"
+
+
+def sbc_problem(*, backend: str = "jax", seed: int = SBC_SEED) -> FittingProblem:
+    """The **simulating** problem: the population arm over the SBC collection.
+
+    Its observed values are never used — :func:`ampere.results.calibration.sbc`
+    replaces them with each simulation — but its per-point uncertainties are:
+    1 % of the truth, 5 % on the poorly constrained member.
+    """
+    data = generate_population(
+        size=SBC_SIZE,
+        count=SBC_SPECTRA,
+        deviated=SBC_DEVIATED,
+        poorly_constrained=SBC_POORLY_CONSTRAINED,
+    )
+    return build_arm(data, "population", backend=backend, seed=seed)
+
+
+def _independent_over(replica: FittingProblem, backend: str) -> FittingProblem:
+    """The independent arm over a replica's simulated spectra, labels kept."""
+    models: dict[str, Any] = {}
+    datasets: list[Dataset] = []
+    for index, (label, dataset) in enumerate(replica.datasets.items()):
+        grid = np.asarray(dataset.observed.axes[0].values, dtype=float)
+        models[model_label(index)] = model_for(backend, grid)
+        datasets.append(
+            Dataset(
+                dataset.observed,
+                likelihood=build_likelihood("flexible", backend=backend),
+                model=model_label(index),
+                label=label,
+            )
+        )
+    return FittingProblem(models, datasets, seed=replica.seed)
+
+
+def _with_member_amplitudes(stored: Any, labels: Sequence[str]) -> Any:
+    """A tree whose ``posterior`` stacks the independent amplitudes along ``gp``."""
+    import xarray as xr
+
+    posterior = stored["posterior"].to_dataset()
+    stacked = xr.concat(
+        [posterior[f"{label}.likelihood.amplitude"] for label in labels],
+        dim=xr.DataArray(list(labels), dims=POPULATION_LABEL, name=POPULATION_LABEL),
+    ).transpose("chain", "draw", POPULATION_LABEL)
+    return xr.DataTree.from_dict({"posterior": xr.Dataset({MEMBER_AMPLITUDE: stacked})})
+
+
+def calibrate(
+    arm: str = "population",
+    *,
+    count: int,
+    backend: str = "jax",
+    budget: EmceeBudget | NutsBudget = SBC_NUTS,
+    seed: int = SBC_SEED,
+) -> Any:
+    """:func:`~ampere.results.calibration.sbc` over *count* refits of *arm*.
+
+    **What is simulated.** Every simulation draws ``(mu, sigma, z_i)``, the
+    length scales and the model parameters from the population arm's own joint
+    prior, derives ``amplitude_i = exp(mu + sigma z_i)``, and observes each
+    spectrum as the model plus a Matérn-3/2 realisation at that amplitude plus
+    the white noise. That realisation *is* the injected deviation — a
+    correlated departure from the model, different in every spectrum, whose
+    size is drawn from the population — so the simulated data carry it by
+    construction and the truth for every ranked quantity is the population
+    draw itself.
+
+    **What is ranked.** ``population``: ``gp.mu``, ``gp.sigma`` and each
+    element of ``gp.amplitude``. ``independent`` (the contrast — the same
+    replicas, fitted with N independent half-normal amplitudes): each member's
+    amplitude, stacked as :data:`MEMBER_AMPLITUDE` and ranked against the same
+    simulated ``gp.amplitude``.
+    """
+    from ampere.results.calibration import sbc
+
+    if arm not in ("population", "independent"):
+        raise ValueError(f"SBC compares the population and independent arms, not {arm!r}.")
+
+    def factory(replica: FittingProblem) -> Any:
+        if arm == "population":
+            return run(replica, budget)
+        fitted = _independent_over(replica, backend)
+        return _with_member_amplitudes(run(fitted, budget), list(replica.datasets))
+
+    ranked: dict[str, str] | list[str] = (
+        [f"{POPULATION_LABEL}.mu", f"{POPULATION_LABEL}.sigma", f"{POPULATION_LABEL}.amplitude"]
+        if arm == "population"
+        else {MEMBER_AMPLITUDE: f"{POPULATION_LABEL}.amplitude"}
+    )
+    return sbc(
+        sbc_problem(backend=backend, seed=seed),
+        factory,
+        count=count,
+        draws=RANK_DRAWS,
+        parameters=ranked,
+        seed=seed,
+        label=f"m2_populations, {arm} arm",
+    )
+
+
+def coverage_at(calibration: Any, level: float) -> dict[str, float]:
+    """The empirical coverage of the central *level* interval, per ranked column."""
+    levels = np.asarray(calibration["level"].values)
+    index = int(np.argmin(np.abs(levels - level)))
+    if abs(float(levels[index]) - level) > 1e-9:
+        raise ValueError(f"level {level} is not on the calibration's grid {levels}.")
+    names = [str(name) for name in calibration["parameter"].values]
+    values = np.asarray(calibration["coverage"].values)[index]
+    return dict(zip(names, (float(v) for v in values), strict=True))
 
 
 def main(argv: Sequence[str] | None = None) -> int:

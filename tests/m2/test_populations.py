@@ -302,3 +302,142 @@ class TestThePopulationOnTheM2Pattern:
         )
         print(f"\n{backend} tied amplitude {tied:.4f} Jy, largest clean {clean:.4f} Jy")
         assert tied >= TIED_INFLATION_FACTOR * clean
+
+
+# ---------------------------------------------------------------------------
+# 6. Calibration (SBC over refits; NUTS on torch and jax; heavy)
+# ---------------------------------------------------------------------------
+
+#: The study's SBC thresholds (``test_many_lines_calibration.py``): the nominal
+#: level coverage is read at, and how far below it a calibrated fit may fall at
+#: ten refits — two binomial standard errors, rounded up.
+NOMINAL = 0.9
+COVERAGE_ALLOWANCE = 0.2
+
+#: Refits at the per-PR level, and behind ``-m m2_full``.
+SIMULATIONS = 10
+FULL_SIMULATIONS = 24
+
+#: The uniformity check's floor: Talts et al.'s ranks of a calibrated fit fail
+#: a KS test at this level one time in a hundred per column.
+UNIFORMITY_FLOOR = 0.01
+
+HYPERPARAMETERS = (f"{POPULATION_LABEL}.mu", f"{POPULATION_LABEL}.sigma")
+
+
+def _calibrate(arm: str, count: int, backend: str) -> Any:
+    pytest.importorskip(backend)
+    with warnings.catch_warnings():
+        # sbc's own warning that ten simulations is a smoke-test count, and
+        # NUTS' chatter: the coverage is the assertion.
+        warnings.simplefilter("ignore")
+        return populations.calibrate(arm, count=count, backend=backend)
+
+
+@pytest.fixture(scope="module")
+def calibrations() -> dict[tuple[str, str], Any]:
+    return {}
+
+
+def _calibration(cache: dict[tuple[str, str], Any], arm: str, backend: str) -> Any:
+    if (arm, backend) not in cache:
+        cache[(arm, backend)] = _calibrate(arm, SIMULATIONS, backend)
+    return cache[(arm, backend)]
+
+
+@pytest.mark.heavy
+@pytest.mark.parametrize("backend", NATIVE)
+class TestThePopulationIsCalibrated:
+    """What is simulated and what is ranked: :func:`~examples.m2_populations.populations.calibrate`.
+
+    Each simulation draws the population's hyperparameters, the members'
+    ``z``, the length scales and the model parameters from the population
+    arm's own prior and observes every spectrum as the model plus a Matérn-3/2
+    realisation at ``exp(mu + sigma z_i)`` plus the white noise — the
+    deviation, drawn per member at a population-drawn size. The truth ranked
+    against is that draw.
+    """
+
+    def test_the_hyperparameters_cover_at_nominal(self, calibrations: Any, backend: str) -> None:
+        """Measured on jax: 0.8 on both (ten refits, 236 s), against a floor of 0.7."""
+        coverage = populations.coverage_at(
+            _calibration(calibrations, "population", backend), NOMINAL
+        )
+        print(f"\n{backend} population coverage at {NOMINAL}: {coverage}")
+        for name in HYPERPARAMETERS:
+            assert coverage[name] >= NOMINAL - COVERAGE_ALLOWANCE, (name, coverage)
+
+    def test_the_hyperparameters_ranks_are_uniform(self, calibrations: Any, backend: str) -> None:
+        """Measured on jax: KS p-values 0.53 (``mu``) and 0.83 (``sigma``)."""
+        calibration = _calibration(calibrations, "population", backend)
+        names = [str(name) for name in calibration["parameter"].values]
+        pvalues = dict(zip(names, np.asarray(calibration["ks_pvalue"].values), strict=True))
+        print(f"\n{backend} uniformity p-values: {pvalues}")
+        for name in HYPERPARAMETERS:
+            assert pvalues[name] >= UNIFORMITY_FLOOR, (name, pvalues)
+
+    def test_the_contrast_is_reported(self, calibrations: Any, backend: str) -> None:
+        """The independent arm's per-member coverage on the same replicas.
+
+        Reported beside the population's, and held only to having produced a
+        usable fit on every replica: whether N independent half-normal
+        amplitudes over- or under-cover a population-drawn truth depends on
+        where the draw lands against the half-normal's scale, so the direction
+        is not a claim this budget can pin. Measured on jax at ten refits: the
+        population's per-member coverage 0.7, 0.7, 0.8, 0.8; the independent
+        arm's 0.8, 0.7, 0.9, 0.9 — no contrast this count resolves, which is
+        itself the finding: N independent half-normal amplitudes are not
+        miscalibrated here, they are only less informed (the shrinkage rows).
+        """
+        population = _calibration(calibrations, "population", backend)
+        independent = _calibration(calibrations, "independent", backend)
+        print(
+            f"\n{backend} member amplitudes' coverage at {NOMINAL}:"
+            f"\n  population  {populations.coverage_at(population, NOMINAL)}"
+            f"\n  independent {populations.coverage_at(independent, NOMINAL)}"
+        )
+        for calibration in (population, independent):
+            assert int(calibration.attrs["ampere_calibration_failures"]) == 0
+            assert calibration["ranks"].shape[0] == SIMULATIONS
+
+
+# ---------------------------------------------------------------------------
+# The marked budget: the reference path's emcee, and SBC at the full count
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.m2_full
+@pytest.mark.study
+def test_the_reference_path_reaches_the_same_conclusions() -> None:
+    """emcee on the numpy path, the independent and population arms, at POPULATION_EMCEE.
+
+    The claims the per-PR rows make on the gradient path, made again by the
+    ensemble sampler on the reference backend: the spread recovered, the
+    shrinkage factor, the floor. About forty minutes. Measured: M2FULL_PLACEHOLDER.
+    """
+    with warnings.catch_warnings():
+        # EnsembleSizeWarning says exactly what the module docstring says.
+        warnings.simplefilter("ignore")
+        comparison = populations.compare(
+            backend="reference",
+            budget=populations.POPULATION_EMCEE,
+            arms=("independent", "population"),
+        )
+    print("\n" + comparison.table())
+    low, high = np.quantile(comparison.hyperparameter("sigma"), [0.025, 0.975])
+    assert low <= populations.sample_spread(comparison) <= high
+    assert comparison.shrinkage(POORLY_CONSTRAINED) >= POPULATION_SHRINKAGE_FACTOR
+    for index in comparison.deviated:
+        assert comparison.amplitude("population", index).median >= POPULATION_SIGNAL_FLOOR
+        assert comparison.worst_bias("population", index) <= study.FLEXIBLE_MAX_BIAS_WIDTHS
+
+
+@pytest.mark.m2_full
+@pytest.mark.parametrize("backend", NATIVE)
+def test_the_calibration_at_the_full_count(backend: str) -> None:
+    """SBC at FULL_SIMULATIONS, where a coverage estimate has some resolution."""
+    calibration = _calibrate("population", FULL_SIMULATIONS, backend)
+    coverage = populations.coverage_at(calibration, NOMINAL)
+    print(f"\n{backend} population coverage at {NOMINAL}, {FULL_SIMULATIONS} refits: {coverage}")
+    for name in HYPERPARAMETERS:
+        assert coverage[name] >= NOMINAL - COVERAGE_ALLOWANCE, (name, coverage)
