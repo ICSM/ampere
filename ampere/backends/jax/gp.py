@@ -132,7 +132,6 @@ So both surfaces guard, and they guard differently because they must:
 from __future__ import annotations
 
 import dataclasses
-import functools
 import math
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
@@ -164,8 +163,9 @@ from ampere.core.hsgp import (
 )
 from ampere.core.kernels import lookup_quasiseparable_term, refuse_warped_composite
 
-from ._config import BACKEND, require_x64, x64_enabled
+from ._config import BACKEND, require_x64
 from ._device import DEVICE, device_flag, place_on, resolve_device
+from ._quasisep import CELERITE2, QuasisepProvider
 
 __all__ = [
     "DEVICE",
@@ -836,127 +836,49 @@ class DenseGP(GPSolver):
 
 
 # ---------------------------------------------------------------------------
-# The quasiseparable solve: celerite2.jax, over ampere's own exact term
+# The quasiseparable solve: ampere's own exact term, over a recursion provider
 # ---------------------------------------------------------------------------
 
 
-@functools.cache
-def _celerite2_jax() -> Any:
-    """``celerite2.jax``, imported **only after** x64 is already on.
+@dataclasses.dataclass(frozen=True)
+class _Factorisation:
+    """``K + diag(a) = L D Lᵀ`` on sorted coordinates, as the provider returned it.
 
-    The deferral is the whole point (see this module's docstring).
-    ``celerite2.jax``'s ``__init__`` reads ``jax_enable_x64`` and, if it is
-    off, warns and calls ``config.update`` itself — which is exactly what
-    ``lowering.md`` §10.2(a) forbids ampere from doing, done to ampere by a
-    dependency. Two consequences would follow from importing it at module
-    level: a user who imported ``ampere.backends.jax`` would have the
-    process-global flag flipped by an ``import`` statement they did not write,
-    and :func:`~ampere.backends.jax._config.require_x64` — the guard that is
-    supposed to *refuse* when the flag is off — would be satisfied by a flag
-    celerite2 had just set on their behalf.
-
-    So the import happens here, on first use, and every caller has already
-    passed ``require_x64`` at construction. The check below states that
-    invariant rather than trusting it: if it ever fires, the deferral has been
-    routed around and the guard has stopped meaning anything.
-
-    :func:`functools.cache` makes it a singleton, so the module object and the
-    term class built from it are stable for ``isinstance`` and for celerite2's
-    own caches.
-    """
-    if not x64_enabled():
-        raise LikelihoodError(
-            "ampere tried to import celerite2.jax while jax's x64 mode was off. It must never "
-            "do that: celerite2.jax turns x64 on as an import side effect, which would make "
-            "ampere.backends.jax.require_x64() pass on a flag nobody in your program set "
-            "(lowering.md §10.2(a)). Call ampere.backends.jax.configure_x64() first. Reaching "
-            "this message means the deferral in ampere.backends.jax.gp has been routed around, "
-            "which is a bug in ampere rather than in your program."
-        )
-    import celerite2.jax
-
-    return celerite2.jax
-
-
-def _degenerate_norm(log_det: Any) -> tuple[Any, Any]:
-    """celerite2's failed-factorisation branch, at module level (see below)."""
-    return -jnp.inf, jnp.inf
-
-
-@functools.cache
-def _valid_norm(size: int) -> Any:
-    """celerite2's successful-factorisation branch for *size* samples, one per size.
-
-    Cached so that the *same* function object is handed to ``lax.cond`` on
-    every call with this many samples; see :func:`_gaussian_process_type`.
-    *size* stays a Python constant inside the branch, exactly as in
-    celerite2's own closure, so XLA folds ``size * log(2 pi)`` the same way.
+    ``t`` is the coordinate the recursion ran over — w(x) for a warped kernel
+    (W5.7), the sorted axis otherwise — and ``c``, ``U`` the generators the
+    solves need beside ``d`` and ``W``. Everything :class:`QuasisepGP` computes
+    is a composition of these five arrays and the provider's four operations.
     """
 
-    def _valid(log_det: Any) -> tuple[Any, Any]:
-        return log_det, -0.5 * (log_det + size * jnp.log(2 * jnp.pi))
-
-    return _valid
-
-
-@functools.cache
-def _gaussian_process_type() -> Any:
-    """``celerite2.jax.GaussianProcess`` without the per-call recompilation (**W5.17**).
-
-    celerite2.jax's ``_do_compute`` ends with ``lax.cond(bad, _bad, _good)``
-    whose two branches are closures defined afresh on every call. Called
-    eagerly — which is what this module's numpy-facing contract path does —
-    every call therefore hands jax new branch functions, jax traces new
-    branch jaxprs, and the cond's dispatch cache misses: one XLA compilation
-    per ``log_prob``, about 20 ms, which ``docs/design/performance_memo.md``
-    §3.2 measured as ~98 % of the contract path's time. Under ``jit`` (the
-    realised path) the cost is paid once at trace time and nothing changes.
-
-    This subclass performs the identical operations in the identical order
-    and hands ``lax.cond`` branch functions that are the same objects from
-    call to call — the log-determinant enters as the cond's operand, which is
-    how jax already lowered the closure's captured value — so the compiled
-    cond is reused. The values are bit-for-bit those of the stock class
-    (checked on the M2 load's three kernels over 100 draws each, and by the
-    conformance suite).
-    """
-    celerite2_jax = _celerite2_jax()
-    ops = celerite2_jax.ops
-
-    class _GaussianProcess(celerite2_jax.GaussianProcess):  # type: ignore[misc, name-defined]
-        def _do_compute(self, quiet: Any) -> None:
-            self._d, self._W = ops.factor(self._t, self._c, self._a, self._U, self._V)
-            self._log_det = jnp.sum(jnp.log(self._d))
-            bad = jnp.any(self._d <= 0) | (~jnp.isfinite(self._log_det))
-            self._log_det, self._norm = jax.lax.cond(
-                bad, _degenerate_norm, _valid_norm(self._size), self._log_det
-            )
-
-    return _GaussianProcess
+    t: jax.Array
+    c: jax.Array
+    U: jax.Array
+    d: jax.Array
+    W: jax.Array
 
 
-@functools.cache
-def _ampere_term_type() -> Any:
-    r"""The ``celerite2.jax`` ``Term`` subclass that wraps an ampere kernel.
+def _celerite_matrices(
+    kernel: Kernel,
+    values: Mapping[str, Any],
+    ordered_axis: Any,
+    ordered_diagonal: Any,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    r"""``(c, a, U, V)``: the exact celerite representation of a kernel, in jax.
 
-    **W4.5 replaced a transcription with a lookup.** Until W4.5 this was
-    ``_matern32_term_type``: a hand-written ``jax.numpy`` copy of the core's
-    rank-2 Matérn-3/2 generators, beside a private ``_QUASISEPARABLE_TERMS``
-    table that had to carry exactly the same families as the core's and the
-    torch backend's, with nothing able to check that it did. Both obligations
-    are now structural: the generators come from
-    :func:`ampere.core.kernels.lookup_quasiseparable_term`, the one registry
-    every backend reads, and they are built by the *same* function the
-    reference path uses, in :class:`JaxOps` instead of numpy. A family this
-    backend could lower and another could not is no longer expressible.
+    Straight from the public registry — :func:`ampere.core.kernels.
+    lookup_quasiseparable_term`, which all three backends read — and built by
+    the *same* function the reference path uses, in :class:`JaxOps` instead of
+    numpy (**W4.5**: a family this backend could lower and another could not is
+    no longer expressible). ``a`` is the full diagonal, ``ordered_diagonal``
+    plus the kernel's own marginal variance.
 
-    Never ``celerite2.jax.terms.Matern32Term``, and the reason is unchanged:
-    that one is an *approximation* (a celerite pair with a small ``eps``, since
-    the celerite basis has no :math:`\tau e^{-c\tau}` member), and at its
-    default ``eps = 0.01`` it costs about 5e-3 in the log-likelihood on a
-    realistic spectrum — three orders outside ``tolerances.cross_solver``. The
-    solver underneath does not need the celerite basis at all: it factorises
-    any rank-J semiseparable matrix
+    Never ``celerite2.jax.terms.Matern32Term``, and the reason is unchanged
+    since slice 2: that one is an *approximation* (a celerite pair with a small
+    ``eps``, since the celerite basis has no :math:`\tau e^{-c\tau}` member),
+    and at its default ``eps = 0.01`` it costs about 5e-3 in the log-likelihood
+    on a realistic spectrum — three orders outside ``tolerances.cross_solver``.
+    The recursions do not need the celerite basis at all: they factorise any
+    rank-J semiseparable matrix
 
     .. math::
         K_{nm} = \sum_j U_{nj} V_{mj} e^{-c_j (t_n - t_m)}\quad (n > m),
@@ -964,61 +886,28 @@ def _ampere_term_type() -> Any:
     which is what :class:`~ampere.core.CeleriteRepresentation` is, and in which
     Matérn-1/2, -3/2 and -5/2, the SHO and the rotation pair are all exact.
 
-    The generators of the Matérn terms grow with the coordinate, so
-    :math:`U_n \cdot V_m` is a difference of large numbers when the data span
-    many length scales; the builders re-reference the coordinates to the
-    midpoint of their own range, which is exact since only differences enter.
-    This module's docstring records what that costs, measured.
+    **W7.10** removed the ``celerite2.jax`` ``Term`` subclass this used to be
+    wrapped in: the arrays are what either provider consumes, and building them
+    without celerite2 is what lets the scan provider run without importing it.
+    The arithmetic is the wrapper's own, operation for operation, so the
+    celerite2 provider's numbers did not move (checked bit for bit).
+
+    The builders receive the **raw** sorted coordinate and apply any warp
+    themselves (W5.7); they re-reference it to the midpoint of its own range,
+    which is exact since only differences enter, and which bounds the
+    cancellation this module's docstring measures.
     """
-    terms = _celerite2_jax().terms
-
-    class _AmpereTerm(terms.Term):
-        """An ampere :class:`~ampere.core.Kernel` presented as a celerite2 term."""
-
-        def __init__(self, kernel: Kernel, values: Mapping[str, Any], axis: Any = None) -> None:
-            # Deliberately *not* coerced with float() anywhere below these
-            # lines: the hyperparameters are what a gradient flows through, and
-            # on the traced path they are tracers.
-            self.kernel = kernel.with_ops(JaxOps(None))
-            self.values = dict(values)
-            self.builder = lookup_quasiseparable_term(kernel.FAMILY)
-            # **W5.7.** ``x`` comes back from celerite2 as the coordinate
-            # ``compute`` was given — w(x) for a warped kernel — while the
-            # registry's builders are documented to receive the *raw* sorted
-            # coordinate and apply any warp themselves. Carrying the raw axis
-            # keeps that contract as written and keeps the two evaluations of
-            # w in one place, the kernel.
-            self.axis = axis
-
-        def get_value(self, tau: Any) -> jax.Array:
-            separation = jnp.abs(jnp.atleast_1d(jnp.asarray(tau, dtype=jnp.float64)))
-            return jnp.asarray(self.kernel.value(separation, self.values), dtype=jnp.float64)
-
-        def get_celerite_matrices(
-            self,
-            x: Any,
-            diag: Any,
-            **kwargs: Any,
-        ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
-            given = x if self.axis is None else self.axis
-            points = jnp.atleast_1d(jnp.asarray(given, dtype=jnp.float64))
-            diagonal = jnp.atleast_1d(jnp.asarray(diag, dtype=jnp.float64))
-            # x arrives sorted (QuasisepGP sorts before calling), which is what
-            # the builders' midpoint centring assumes.
-            representation = self.builder(self.kernel, self.values, points)
-            return (
-                representation.decay,
-                diagonal + representation.marginal,
-                representation.left,
-                representation.right,
-            )
-
-    return _AmpereTerm
-
-
-def _celerite_term(kernel: Kernel, values: Mapping[str, Any], axis: Any = None) -> Any:
-    """Build the exact celerite representation of a resolved kernel, in jax."""
-    return _ampere_term_type()(kernel, kernel.resolve(values), axis)
+    resolved = kernel.resolve(values)
+    builder = lookup_quasiseparable_term(kernel.FAMILY)
+    points = jnp.atleast_1d(jnp.asarray(ordered_axis, dtype=jnp.float64))
+    diagonal = jnp.atleast_1d(jnp.asarray(ordered_diagonal, dtype=jnp.float64))
+    representation = builder(kernel.with_ops(JaxOps(None)), resolved, points)
+    return (
+        representation.decay,
+        diagonal + representation.marginal,
+        representation.left,
+        representation.right,
+    )
 
 
 def _bare_coordinates(coordinates: Any, kernel: Kernel | None = None) -> Any:
@@ -1134,6 +1023,9 @@ class QuasisepGP(GPSolver):
     #: See the class docstring: celerite2's primitives have no batching rule.
     BATCHABLE: ClassVar[bool] = False
     DEVICE: ClassVar[str] = DEVICE
+    #: The recursion provider (:mod:`ampere.backends.jax._quasisep`); an
+    #: instance attribute set at construction shadows this default.
+    _provider: ClassVar[QuasisepProvider] = CELERITE2
 
     def __post_init__(self, device: Any) -> None:
         require_x64("the jax quasiseparable GP solver")
@@ -1158,6 +1050,7 @@ class QuasisepGP(GPSolver):
             )
         object.__setattr__(self, "_device", resolved)
         object.__setattr__(self, "DEVICE", device_flag(device, resolved))
+        object.__setattr__(self, "_provider", CELERITE2)
 
     def check_compatible(self, kernel: Kernel, observed: Any) -> None:
         super().check_compatible(kernel, observed)
@@ -1244,28 +1137,69 @@ class QuasisepGP(GPSolver):
         ordered_axis: jax.Array,
         ordered_diagonal: jax.Array,
         values: Mapping[str, Any],
-    ) -> Any:
-        """A ``celerite2.jax`` ``GaussianProcess`` factorised on sorted coordinates.
+    ) -> _Factorisation:
+        """``K + diag = L D Lᵀ`` on sorted coordinates, by this solver's provider.
 
-        No precondition checking here, and that is deliberate: the two callers
+        No precondition checking here, and that is deliberate: the callers
         need the failure in two different forms — an exception on the contract
         path, ``-inf`` on the traced one — and a check in the shared helper
-        could serve only one of them. celerite2 itself checks nothing: it
-        returns quiet NaN where a Cholesky raises (measured), which is the
-        reason both callers guard.
+        could serve only one of them. Neither provider raises: a failed pivot
+        comes back as a ``d`` that is not positive and finite (see
+        :mod:`ampere.backends.jax._quasisep`), which is the reason every caller
+        guards.
+
+        **W7.10.** Until W7.10 this built a ``celerite2.jax.GaussianProcess``
+        (W5.17's subclass of it, whose ``lax.cond`` compiled once). The raw
+        arrays and the provider's operations replace it: there is no
+        ``lax.cond`` on this route at all, so W5.17's compile-once property
+        holds by construction rather than by keeping branch functions stable.
         """
-        term = _celerite_term(kernel, values, ordered_axis)
-        gp = _gaussian_process_type()(term, mean=0.0)
-        # **W5.7.** The recursion's propagators come from the coordinate handed
-        # to ``compute``, and a warped kernel is stationary in w(x) rather than
-        # in x. ``warped_coordinate`` is the identity for every other kernel;
-        # a warp is monotone by construction, so the sorted axis stays sorted.
-        gp.compute(
-            kernel.warped_coordinate(ordered_axis, values),
-            diag=ordered_diagonal,
-            check_sorted=False,
-        )
-        return gp
+        c, a, U, V = _celerite_matrices(kernel, values, ordered_axis, ordered_diagonal)
+        # **W5.7.** The recursion's propagators come from the coordinate it runs
+        # over, and a warped kernel is stationary in w(x) rather than in x.
+        # ``warped_coordinate`` is the identity for every other kernel; a warp is
+        # monotone by construction, so the sorted axis stays sorted. The
+        # generators above came from the raw axis, as the registry documents.
+        t = jnp.asarray(kernel.warped_coordinate(ordered_axis, values), dtype=jnp.float64)
+        d, W = self._provider.factor(t, c, a, U, V)
+        return _Factorisation(t=t, c=c, U=U, d=d, W=W)
+
+    def _log_likelihood(self, factorisation: _Factorisation, residual: jax.Array) -> jax.Array:
+        """``log N(residual; 0, L D Lᵀ)`` from a factorisation, sorted residual in.
+
+        celerite2's ``GaussianProcess.log_likelihood`` written out over the
+        raw arrays, operation for operation (so the celerite2 provider's
+        numbers are bit for bit those of the wrapper W7.10 removed): the
+        log-determinant ``Σ log d``, a forward substitution, and the
+        quadratic form ``Σ z² / d``. A failed factorisation folds to ``-inf``
+        through one ``jnp.where``, where celerite2 used a ``lax.cond``.
+        """
+        f = factorisation
+        log_det = jnp.sum(jnp.log(f.d))
+        bad = jnp.any(f.d <= 0) | (~jnp.isfinite(log_det))
+        size = f.d.shape[0]
+        norm = jnp.where(bad, -jnp.inf, -0.5 * (log_det + size * jnp.log(2 * jnp.pi)))
+        alpha = self._provider.solve_lower(f.t, f.c, f.U, f.W, residual[:, None])[:, 0]
+        return norm - 0.5 * jnp.sum(alpha**2 / f.d)
+
+    def _solve(self, factorisation: _Factorisation, right: jax.Array) -> jax.Array:
+        """``(K + diag)⁻¹ right`` for an ``(n,)`` or ``(n, m)`` right-hand side, in O(N).
+
+        A forward substitution, a division by ``D``, a back substitution —
+        celerite2's own ``_do_solve``.
+        """
+        f = factorisation
+        columns = right[:, None] if right.ndim == 1 else right
+        z = self._provider.solve_lower(f.t, f.c, f.U, f.W, columns)
+        z = self._provider.solve_upper(f.t, f.c, f.U, f.W, z / f.d[:, None])
+        return z[:, 0] if right.ndim == 1 else z
+
+    def _dot_tril(self, factorisation: _Factorisation, draws: jax.Array) -> jax.Array:
+        """``L D^{1/2} z`` for an ``(n,)`` *draws*: celerite2's ``dot_tril``."""
+        f = factorisation
+        z = draws[:, None] * jnp.sqrt(f.d)[:, None]
+        z = z + self._provider.matmul_lower(f.t, f.c, f.U, f.W, z)
+        return z[:, 0]
 
     @staticmethod
     def _unsort(ordered: jax.Array, order: jax.Array) -> jax.Array:
@@ -1295,8 +1229,8 @@ class QuasisepGP(GPSolver):
         r = self.place(residual)
         diagonal = self.place(variance) + self.jitter**2
         ordered = jnp.take(diagonal, order)
-        gp = self._factorise(kernel, jnp.take(axis, order), ordered, values)
-        value = jnp.asarray(gp.log_likelihood(jnp.take(r, order)), dtype=jnp.float64)
+        factorisation = self._factorise(kernel, jnp.take(axis, order), ordered, values)
+        value = jnp.asarray(self._log_likelihood(factorisation, jnp.take(r, order)))
         usable = jnp.all(jnp.isfinite(ordered)) & jnp.all(ordered >= 0.0) & jnp.isfinite(value)
         return jnp.where(usable, value, -jnp.inf)
 
@@ -1363,8 +1297,10 @@ class QuasisepGP(GPSolver):
         r = self.place(residual)
         diagonal = self.place(variance) + self.jitter**2
         self._check_diagonal(diagonal)
-        gp = self._factorise(kernel, jnp.take(axis, order), jnp.take(diagonal, order), values)
-        value = gp.log_likelihood(jnp.take(r, order))
+        factorisation = self._factorise(
+            kernel, jnp.take(axis, order), jnp.take(diagonal, order), values
+        )
+        value = self._log_likelihood(factorisation, jnp.take(r, order))
         self._refuse_nan(value)
         return float(value)
 
@@ -1388,14 +1324,16 @@ class QuasisepGP(GPSolver):
         r = self.place(residual)
         diagonal = self.place(variance) + self.jitter**2
         self._check_diagonal(diagonal)
-        gp = self._factorise(kernel, jnp.take(axis, order), jnp.take(diagonal, order), values)
+        factorisation = self._factorise(
+            kernel, jnp.take(axis, order), jnp.take(diagonal, order), values
+        )
 
-        solved_residual = jnp.asarray(gp.apply_inverse(jnp.take(r, order)))
+        solved_residual = self._solve(factorisation, jnp.take(r, order))
         self._refuse_nan(solved_residual)
         alpha = self._unsort(solved_residual, order)
         target = points if at is None else _points(at)
         cross = jnp.asarray(kernel.matrix(target, points, values), dtype=jnp.float64)
-        columns = jnp.asarray(gp.apply_inverse(jnp.take(cross.T, order, axis=0)))
+        columns = self._solve(factorisation, jnp.take(cross.T, order, axis=0))
         solved = jnp.zeros_like(columns).at[order, :].set(columns)
         prior_variance = jnp.asarray(kernel.diagonal(target, values), dtype=jnp.float64)
         return GPConditional(
@@ -1430,13 +1368,13 @@ class QuasisepGP(GPSolver):
         # survives it (the reference path's ``float(...) or 1.0``).
         mean_variance = jnp.mean(jnp.asarray(kernel.diagonal(points, values), dtype=jnp.float64))
         scale = jnp.where(mean_variance != 0.0, mean_variance, 1.0)
-        gp = self._factorise(
+        factorisation = self._factorise(
             kernel,
             jnp.take(axis, order),
             jnp.full(int(order.size), jitter, dtype=jnp.float64) * scale,
             values,
         )
-        transformed = jnp.asarray(gp.dot_tril(jnp.take(draws, order)), dtype=jnp.float64)
+        transformed = self._dot_tril(factorisation, jnp.take(draws, order))
         return self._unsort(transformed, order)
 
     def latent_transform(
@@ -1459,56 +1397,6 @@ class QuasisepGP(GPSolver):
 
     # -- the leave-one-out decomposition, in O(N) (W2.5 slice 3) --------------
 
-    def _celerite_arrays(
-        self,
-        kernel: Kernel,
-        ordered_axis: jax.Array,
-        ordered_diagonal: jax.Array,
-        values: Mapping[str, Any],
-    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
-        r"""``(c, U, d, W)`` — celerite2's own factorisation, without the wrapper.
-
-        :meth:`_factorise` builds a ``celerite2.jax.GaussianProcess``, which is
-        the right surface for a density: it holds the arrays, does the solves
-        and carries the differentiation rules. :meth:`conditional_loo` needs
-        the arrays *themselves*, because the recursion below walks the
-        factorisation rather than solving against it, and reading them off a
-        constructed ``GaussianProcess``'s ``_c``/``_U``/``_d``/``_W`` would be
-        a coupling to private attributes where ``celerite2.jax.ops`` is the
-        public entry point to the same compiled kernels.
-
-        So this calls ``ops.factor`` directly, exactly as the torch backend
-        calls ``celerite2.backprop.factor`` through
-        :mod:`ampere.backends.torch._celerite`. The convention is celerite2's:
-        ``K + diag(a) = L D Lᵀ`` with ``L`` **unit** lower triangular,
-        ``L_{nm} = U_n · W_m Π_{n>k>m} p_k``.
-        """
-        term = _celerite_term(kernel, values, ordered_axis)
-        c, a, U, V = term.get_celerite_matrices(ordered_axis, ordered_diagonal)
-        # W5.7: the generators come from the raw coordinate (the term carries
-        # it), the recursion from w(x) — the identity for an unwarped kernel.
-        d, W = _celerite2_jax().ops.factor(
-            kernel.warped_coordinate(ordered_axis, values), c, a, U, V
-        )
-        return c, U, d, W
-
-    def _apply_inverse(
-        self,
-        axis: jax.Array,
-        c: jax.Array,
-        U: jax.Array,
-        d: jax.Array,
-        W: jax.Array,
-        right: jax.Array,
-    ) -> jax.Array:
-        """``(K + diag)⁻¹ right`` for an ``(n,)`` right-hand side, in O(N).
-
-        celerite2's own ``_do_solve``, written out over the raw arrays: a
-        forward substitution, a division by ``D``, a back substitution.
-        """
-        z = _celerite2_jax().ops.solve_lower(axis, c, U, W, right[:, None])
-        return _celerite2_jax().ops.solve_upper(axis, c, U, W, z / d[:, None])[:, 0]
-
     @staticmethod
     def _precision_diagonal(
         axis: jax.Array,
@@ -1526,7 +1414,7 @@ class QuasisepGP(GPSolver):
         ``A = (K + diag(σ²))⁻¹``; celerite2's public **numpy** interface
         exposes no O(N) route to it; and the route that exists "reimplements
         celerite2's internal factorisation convention". This backend pays that
-        coupling anyway — :meth:`_celerite_arrays` calls ``celerite2.jax.ops``
+        coupling anyway — :meth:`_factorise` calls the provider's ``factor``
         directly — and the coupling is *tested*, against
         :meth:`DenseGP.conditional_loo`'s Cholesky, both here and in the
         conformance row.
@@ -1631,17 +1519,16 @@ class QuasisepGP(GPSolver):
         r = self.place(residual)
         diagonal = self.place(variance) + self.jitter**2
         self._check_diagonal(diagonal)
-        sorted_axis = jnp.take(axis, order)
-        c, U, d, W = self._celerite_arrays(kernel, sorted_axis, jnp.take(diagonal, order), values)
-        # celerite2 signals a failed factorisation as a non-positive or
+        f = self._factorise(kernel, jnp.take(axis, order), jnp.take(diagonal, order), values)
+        # Either provider signals a failed factorisation as a non-positive or
         # non-finite D, quietly, exactly as it does for the log-likelihood.
-        if not bool(jnp.all(jnp.isfinite(d)) & jnp.all(d > 0.0)):
+        if not bool(jnp.all(jnp.isfinite(f.d)) & jnp.all(f.d > 0.0)):
             self._refuse_nan(jnp.asarray(jnp.nan))
         # W5.7: the recursion below walks the factorisation, so it runs on the
-        # same coordinate the factorisation did — w(x), the identity unwarped.
-        solve_axis = kernel.warped_coordinate(sorted_axis, values)
-        alpha = self._apply_inverse(solve_axis, c, U, d, W, jnp.take(r, order))
-        precision = self._precision_diagonal(solve_axis, c, U, d, W)
+        # same coordinate the factorisation did — f.t is w(x), the identity
+        # unwarped. It consumes (c, U, d, W) from either provider unchanged.
+        alpha = self._solve(f, jnp.take(r, order))
+        precision = self._precision_diagonal(f.t, f.c, f.U, f.d, f.W)
         terms = 0.5 * jnp.log(precision) - alpha**2 / (2.0 * precision) - 0.5 * _LOG_2PI
         return np.asarray(self._unsort(terms, order))
 
