@@ -22,8 +22,10 @@ implementation on this backend too, and so the cross-backend rows have
 something to compare.
 
 :class:`QuasisepGP` — the exact O(N) quasiseparable solve, over
-**celerite2.jax**, chosen by measurement in slice 2 (``DEVELOPMENT_PLAN.md``
-§2's "jax quasiseparable GP library" row, and §6's deferred-choice bullet).
+**celerite2.jax** on the CPU, chosen by measurement in slice 2
+(``DEVELOPMENT_PLAN.md`` §2's "jax quasiseparable GP library" row, and §6's
+deferred-choice bullet), and over ampere's own ``lax.scan`` recursions on an
+accelerator since W7.10 (:mod:`ampere.backends.jax._quasisep`).
 
 The library choice, and what it cost
 ------------------------------------
@@ -45,6 +47,17 @@ points that is 0.47 s for one likelihood evaluation against celerite2's
 2.3 ms, a factor of 200, and the gap widens with the data. A solver
 ``DEVELOPMENT_PLAN.md`` §2 calls "the scaling answer" cannot be the one that
 stops scaling at 10³ points.
+
+**W7.10 found where that cost lives, and wrote the scan anyway.** It is not the
+recursion's: XLA's CPU backend makes each iteration of a ``scan`` that stacks
+per-step outputs cost time proportional to N, and unrolling the loop by two
+removes it (``performance_memo.md`` §9). ampere's scan provider
+(:mod:`ampere.backends.jax._quasisep`), the same recursions in pure ``jnp``
+over the same rank-J arrays, is linear on the CPU — about 2.8 µs per
+point for a value and gradient against celerite2's 0.4, so seven times
+slower — and it is what :class:`QuasisepGP` runs on an accelerator, where
+celerite2 cannot run at all. On the CPU celerite2 stays the default; the scan
+is there by name (``provider="scan"``) for batching and for CI.
 
 **Accuracy.** Both agree with the dense Cholesky far inside
 ``tolerances.cross_solver`` (1e-6), and both agree with
@@ -72,10 +85,12 @@ Three things celerite2.jax costs, all recorded here rather than hidden:
   :func:`_celerite2_jax` asserts that invariant rather than trusting it.
 * **it has no ``vmap`` batching rule** — ``jax.vmap`` over a density
   containing this solver raises ``NotImplementedError: Batching rule for
-  'celerite2_factor' not implemented``. So this class declares
+  'celerite2_factor' not implemented``. So the celerite2 provider declares
   ``BATCHABLE = False`` where the rest of the backend declares ``True``, and
   ``ampere.core.declared_capabilities`` aggregates that down to a problem
-  which honestly says it cannot be batched. tinygp, being ordinary jax, vmaps.
+  which honestly says it cannot be batched. tinygp, being ordinary jax,
+  vmaps — and so, since W7.10, does the scan provider, which lifts this cost:
+  ``QuasisepGP(provider="scan")`` declares ``BATCHABLE = True`` on itself.
 * **its high-level surface exposes no O(N) route to the diagonal of
   ``(K + diag(σ²))⁻¹``**, which is what every leave-one-out term needs. Slice 2
   read that as a loss and left :meth:`QuasisepGP.conditional_loo` refused, as
@@ -165,7 +180,7 @@ from ampere.core.kernels import lookup_quasiseparable_term, refuse_warped_compos
 
 from ._config import BACKEND, require_x64
 from ._device import DEVICE, device_flag, place_on, resolve_device
-from ._quasisep import CELERITE2, QuasisepProvider
+from ._quasisep import CELERITE2, PROVIDERS, QuasisepProvider
 
 __all__ = [
     "DEVICE",
@@ -933,14 +948,23 @@ def _bare_coordinates(coordinates: Any, kernel: Kernel | None = None) -> Any:
 
 @dataclasses.dataclass(frozen=True)
 class QuasisepGP(GPSolver):
-    """Exact O(N) for ordered 1D data, in jax, over ``celerite2.jax``.
+    """Exact O(N) for ordered 1D data, in jax, over a choice of two recursions.
 
     The jax counterpart of ``ampere.core.QuasisepGP`` — same declaration, same
     exact rank-2 representation of Matérn-3/2, same answer — with the
-    recursions run through ``celerite2.jax``'s XLA custom calls so a gradient
-    flows to the kernel hyperparameters. This is what makes the flexible
-    likelihood a NUTS target on long spectra: 10⁶ points, value and gradient,
-    in under a second, where :class:`DenseGP` would need a 10⁶ by 10⁶ matrix.
+    recursions run differentiably, so a gradient flows to the kernel
+    hyperparameters. This is what makes the flexible likelihood a NUTS target
+    on long spectra: 10⁶ points, value and gradient, in under a second on the
+    CPU, where :class:`DenseGP` would need a 10⁶ by 10⁶ matrix.
+
+    **Two providers** (W7.10, :mod:`ampere.backends.jax._quasisep`) compute
+    the same factorisation: ``"celerite2"``, ``celerite2.jax``'s XLA custom
+    calls into compiled C++, CPU only and the faster there; and ``"scan"``,
+    ampere's own ``lax.scan`` recursions in pure ``jnp``, which run on any
+    device and batch. ``provider="auto"`` (the default) chooses by the
+    *asked-for* device — celerite2 on the CPU, the scan anywhere else — which
+    is the rule ``performance_memo.md`` §9's table gives; the choice is
+    recorded in :meth:`provenance_config`.
 
     A kernel reaches this path only if it declares ``QUASISEPARABLE`` **and**
     every family in its tree has a representation in the public registry
@@ -960,9 +984,9 @@ class QuasisepGP(GPSolver):
     * :meth:`condition` is O(N·M) for M evaluation points, because the
       cross-covariance block is dense by construction;
     * :meth:`conditional_loo` is O(N J³) since slice 3 — the recursion W2.3
-      deferred and W2.4 slice 2 derived, over ``celerite2.jax.ops``'s own
-      ``factor``, so the terms agree with :meth:`DenseGP.conditional_loo`
-      exactly rather than approximately. ``ampere.core.QuasisepGP`` keeps its
+      deferred and W2.4 slice 2 derived, over the provider's own ``factor``,
+      so the terms agree with :meth:`DenseGP.conditional_loo` exactly rather
+      than approximately. ``ampere.core.QuasisepGP`` keeps its
       refusal: the numpy path's circumstances are unchanged.
 
     Parameters
@@ -974,24 +998,35 @@ class QuasisepGP(GPSolver):
         covariance that will not factorise is a fact about the model.
     device
         Platform name (``"cpu"``, the default) or an explicit ``jax.Device``.
-        Never auto-detected; see :class:`DenseGP`.
+        Never auto-detected; see :class:`DenseGP`. Off the CPU the solver
+        runs the scan provider: celerite2's primitives have CPU lowerings
+        alone, so ``provider="celerite2"`` on an accelerator is refused by
+        name (W6.18's refusal, now naming the scan as the way out).
+    provider
+        ``"auto"`` (the default), ``"celerite2"`` or ``"scan"``; anything else
+        is refused naming the three. Like ``device``, an ``InitVar``:
+        configuration rather than declaration, so it stays out of the spec
+        hash, and a problem declared once fits on either.
 
     Notes
     -----
     **No float32 opt-out here.** ``celerite2.jax`` coerces every input to
     float64 in its own ``_as_tensor`` and registers its custom calls for
-    float64 only, so :class:`DenseGP`'s ``precision=`` argument has no
-    counterpart: there is nothing to opt into, and offering the argument and
-    ignoring it would be worse than not offering it.
+    float64 only, and the scan provider is float64 by the same policy, so
+    :class:`DenseGP`'s ``precision=`` argument has no counterpart: offering
+    the argument and ignoring it would be worse than not offering it.
 
-    **BATCHABLE is False**, alone in this backend, because celerite2's
-    primitives register no ``vmap`` batching rule — ``jax.vmap`` over a
-    density containing one raises ``NotImplementedError: Batching rule for
-    'celerite2_factor' not implemented``. The flag is what
-    ``ampere.core.declared_capabilities`` reads, so a problem using this
-    solver reports ``batchable=False`` and
+    **BATCHABLE is per provider.** The class flag is ``False``, the celerite2
+    provider's, because its primitives register no ``vmap`` batching rule —
+    ``jax.vmap`` over a density containing one raises
+    ``NotImplementedError: Batching rule for 'celerite2_factor' not
+    implemented``. A scan instance sets ``BATCHABLE = True`` on itself, as
+    ``DEVICE`` is set per instance. The flag is what
+    ``ampere.core.declared_capabilities`` reads off the instance, so a
+    problem on the celerite2 provider reports ``batchable=False`` and
     :meth:`~ampere.backends.jax.problem.LoweredProblem.log_prob_unconstrained_batched`
-    refuses by name rather than failing inside a trace.
+    refuses by name rather than failing inside a trace, while one on the scan
+    provider batches.
 
     Examples
     --------
@@ -1012,6 +1047,7 @@ class QuasisepGP(GPSolver):
 
     jitter: float = 0.0
     device: dataclasses.InitVar[Any] = DEVICE
+    provider: dataclasses.InitVar[str] = "auto"
 
     NAME: ClassVar[str] = "QuasisepGP"
     EXACT: ClassVar[bool] = True
@@ -1020,37 +1056,55 @@ class QuasisepGP(GPSolver):
     IMPLEMENTED: ClassVar[bool] = True
     BACKEND: ClassVar[str] = BACKEND
     DIFFERENTIABLE: ClassVar[bool] = True
-    #: See the class docstring: celerite2's primitives have no batching rule.
+    #: The celerite2 provider's flag, which is the CPU default: its primitives
+    #: have no batching rule. A scan instance sets ``True`` on itself (W7.10).
     BATCHABLE: ClassVar[bool] = False
     DEVICE: ClassVar[str] = DEVICE
     #: The recursion provider (:mod:`ampere.backends.jax._quasisep`); an
     #: instance attribute set at construction shadows this default.
     _provider: ClassVar[QuasisepProvider] = CELERITE2
 
-    def __post_init__(self, device: Any) -> None:
+    def __post_init__(self, device: Any, provider: str) -> None:
         require_x64("the jax quasiseparable GP solver")
         if not math.isfinite(self.jitter) or self.jitter < 0.0:
             raise LikelihoodError(
                 f"QuasisepGP's jitter must be finite and >= 0, got {self.jitter!r}."
             )
+        if provider != "auto" and provider not in PROVIDERS:
+            raise LikelihoodError(
+                f"{self.NAME} has no recursion provider {provider!r}. The three choices are "
+                f"'auto' (celerite2 on the CPU, the scan on an accelerator), 'celerite2' "
+                f"(celerite2's compiled kernels, CPU only) and 'scan' (ampere's lax.scan "
+                f"recursions, any device, batchable)."
+            )
         resolved = resolve_device(device, self.NAME)
-        if str(resolved.platform) != "cpu":
+        platform = str(resolved.platform)
+        if provider == "auto":
+            # The device rule (W7.10, ``performance_memo.md`` §9): celerite2 on
+            # the CPU, where it is the faster of the two at every size measured;
+            # the scan wherever else, since celerite2 cannot run there at all.
+            # Chosen from the *asked-for* device, never detected (§5).
+            provider = CELERITE2.NAME if platform == "cpu" else "scan"
+        chosen = PROVIDERS[provider]
+        if chosen.PLATFORMS is not None and platform not in chosen.PLATFORMS:
             # celerite2.jax registers its primitives' MLIR lowerings for the
             # CPU alone (celerite2 0.3.3, ``celerite2/jax/ops.py``), so on an
             # accelerator the first factorisation dies inside the trace with
             # "MLIR translation rule for primitive 'celerite2_factor' not found
             # for platform cuda" — the first GPU run's finding (W6.18,
             # 2026-10-05). Refused here, by name, where the user can read it;
-            # ampere never substitutes another solver silently.
+            # ampere never substitutes another provider silently.
             raise LikelihoodError(
-                f"{self.NAME} runs on the CPU only: its O(N) recursions are celerite2's "
-                f"compiled kernels, whose jax primitives have CPU lowerings alone, and "
-                f"{resolved.platform!r} has none. Use DenseGP (or HilbertSpaceGP) on an "
-                f"accelerator, or keep the quasiseparable solver on device='cpu'."
+                f"{self.NAME}(provider={provider!r}) runs on the CPU only: its O(N) "
+                f"recursions are celerite2's compiled kernels, whose jax primitives have CPU "
+                f"lowerings alone, and {platform!r} has none. Use provider='scan' (or the "
+                f"default, provider='auto', which chooses it off the CPU) for ampere's own "
+                f"lax.scan recursions, which run on any device."
             )
         object.__setattr__(self, "_device", resolved)
         object.__setattr__(self, "DEVICE", device_flag(device, resolved))
-        object.__setattr__(self, "_provider", CELERITE2)
+        object.__setattr__(self, "_provider", chosen)
+        object.__setattr__(self, "BATCHABLE", chosen.BATCHABLE)
 
     def check_compatible(self, kernel: Kernel, observed: Any) -> None:
         super().check_compatible(kernel, observed)
@@ -1065,12 +1119,16 @@ class QuasisepGP(GPSolver):
         """``inference.md`` §10a fold-in 10: how this solver computes.
 
         Records the *library* as well as the dtype and device, because "which
-        third-party recursion produced these numbers?" is exactly the question
-        a run archived across the jax/numpy split will be asked, and the two
-        quasiseparable paths do not use the same one.
+        recursion produced these numbers?" is exactly the question a run
+        archived across the jax/numpy split will be asked. Since W7.10 the
+        answer can differ within this class too: ``library`` is
+        ``"celerite2.jax"`` or ``"ampere.jax.scan"``, and ``provider`` the
+        ``provider=`` spelling that selects it — what ``"auto"`` resolved to,
+        never ``"auto"`` itself.
         """
         return {
-            "library": "celerite2.jax",
+            "library": self._provider.LIBRARY,
+            "provider": self._provider.NAME,
             "dtype": "float64",
             "device": self.DEVICE,
             "x64_policy_opt_out": False,
@@ -1129,7 +1187,13 @@ class QuasisepGP(GPSolver):
         # it ever was. Asking the caller's own object is the only test that
         # distinguishes "this is data" from "this is being traced".
         raw = np.asarray(_bare_coordinates(coordinates, kernel), dtype=float)
-        return jnp.asarray(raw, dtype=jnp.float64), jnp.asarray(np.argsort(raw, kind="stable"))
+        # Placed on this solver's device (W7.10): on a node with an accelerator
+        # an unplaced array lands on jax's *default* device, which is not the
+        # one a CPU solver was asked for.
+        order = place_on(
+            jnp.asarray(np.argsort(raw, kind="stable")), getattr(self, "_device", None)
+        )
+        return self.place(raw), order
 
     def _factorise(
         self,

@@ -1094,7 +1094,16 @@ class TestTheQuasiseparableSolver:
     ``Matern32Term``. Those rows are here.
     """
 
-    def test_the_marginal_likelihood_matches_scipy(self) -> None:
+    @pytest.fixture(params=["celerite2", "scan"])
+    def provider(self, request: pytest.FixtureRequest) -> str:
+        """Every row on both recursion providers (W7.10).
+
+        Named explicitly rather than left to ``"auto"``, so that the scan
+        provider — the one an accelerator gets — is exercised on CI's CPU too.
+        """
+        return str(request.param)
+
+    def test_the_marginal_likelihood_matches_scipy(self, provider: str) -> None:
         """Against ``multivariate_normal``, not against ``DenseGP``.
 
         The oracle has to be outside ampere or the row proves only that two
@@ -1107,22 +1116,22 @@ class TestTheQuasiseparableSolver:
         expected = st.multivariate_normal(
             mean=np.zeros(QUASISEP_GRID.size), cov=covariance + np.diag(QUASISEP_VARIANCE)
         ).logpdf(QUASISEP_RESIDUAL)
-        got = QuasisepGP().log_marginal_likelihood(
+        got = QuasisepGP(provider=provider).log_marginal_likelihood(
             kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, kernel.resolve(None)
         )
         assert got == pytest.approx(expected, abs=1e-6)
 
-    def test_it_agrees_with_the_dense_solver(self) -> None:
+    def test_it_agrees_with_the_dense_solver(self, provider: str) -> None:
         kernel = _fitted_matern()
         dense = DenseGP().log_marginal_likelihood(
             kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, QUASISEP_VALUES
         )
-        quasisep = QuasisepGP().log_marginal_likelihood(
+        quasisep = QuasisepGP(provider=provider).log_marginal_likelihood(
             kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, QUASISEP_VALUES
         )
         assert quasisep == pytest.approx(dense, abs=1e-6)
 
-    def test_the_gradient_agrees_with_the_dense_solver(self) -> None:
+    def test_the_gradient_agrees_with_the_dense_solver(self, provider: str) -> None:
         """The reason this class exists at all: an O(N) solve a sampler can differentiate."""
         kernel = _fitted_matern()
 
@@ -1136,12 +1145,12 @@ class TestTheQuasiseparableSolver:
             )
 
         point = jnp.array([0.7, 2.0])
-        quasisep = jax.grad(lambda p: density(QuasisepGP(), p))(point)
+        quasisep = jax.grad(lambda p: density(QuasisepGP(provider=provider), p))(point)
         dense = jax.grad(lambda p: density(DenseGP(), p))(point)
         assert np.asarray(quasisep) == pytest.approx(np.asarray(dense), abs=1e-6)
         assert np.all(np.isfinite(np.asarray(quasisep)))
 
-    def test_unordered_coordinates_give_the_same_answer(self) -> None:
+    def test_unordered_coordinates_give_the_same_answer(self, provider: str) -> None:
         """A Gaussian density is invariant under a simultaneous permutation.
 
         The solver sorts internally and undoes the permutation on the way out,
@@ -1149,7 +1158,7 @@ class TestTheQuasiseparableSolver:
         """
         kernel = _fitted_matern()
         order = np.random.default_rng(2).permutation(QUASISEP_GRID.size)
-        solver = QuasisepGP()
+        solver = QuasisepGP(provider=provider)
         ordered = solver.log_marginal_likelihood(
             kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, QUASISEP_VALUES
         )
@@ -1162,9 +1171,9 @@ class TestTheQuasiseparableSolver:
         )
         assert shuffled == pytest.approx(ordered, abs=1e-9)
 
-    def test_conditioning_and_whitening_agree_with_the_dense_solver(self) -> None:
+    def test_conditioning_and_whitening_agree_with_the_dense_solver(self, provider: str) -> None:
         kernel = _fitted_matern()
-        quasisep, dense = QuasisepGP(), DenseGP()
+        quasisep, dense = QuasisepGP(provider=provider), DenseGP()
         left = quasisep.condition(
             kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, QUASISEP_VALUES
         )
@@ -1181,24 +1190,24 @@ class TestTheQuasiseparableSolver:
             dense.latent_transform(kernel, QUASISEP_GRID, whitened, QUASISEP_VALUES), abs=1e-6
         )
 
-    def test_a_quiet_nan_becomes_a_loud_refusal_on_the_contract_path(self) -> None:
+    def test_a_quiet_nan_becomes_a_loud_refusal_on_the_contract_path(self, provider: str) -> None:
         """celerite2 returns NaN where a Cholesky raises — measured, not assumed."""
         from ampere.core.exceptions import LikelihoodError
 
         kernel = Matern32(0.4, 2.0)
         grid = np.array([1.0, 1.0, 1.0])  # duplicate coordinates: K is singular
         with pytest.raises(LikelihoodError, match="positive definite"):
-            QuasisepGP().log_marginal_likelihood(
+            QuasisepGP(provider=provider).log_marginal_likelihood(
                 kernel, grid, np.zeros(3), np.zeros(3), kernel.resolve(None)
             )
 
-    def test_a_negative_variance_is_refused_before_celerite2_sees_it(self) -> None:
+    def test_a_negative_variance_is_refused_before_celerite2_sees_it(self, provider: str) -> None:
         from ampere.core.exceptions import LikelihoodError
 
         kernel = Matern32(0.4, 2.0)
         grid = np.linspace(1.0, 4.0, 4)
         with pytest.raises(LikelihoodError, match="negative entries"):
-            QuasisepGP().log_marginal_likelihood(
+            QuasisepGP(provider=provider).log_marginal_likelihood(
                 kernel,
                 grid,
                 np.zeros(4),
@@ -1206,33 +1215,37 @@ class TestTheQuasiseparableSolver:
                 kernel.resolve(None),
             )
 
-    def test_the_traced_surface_returns_minus_infinity_instead(self) -> None:
+    def test_the_traced_surface_returns_minus_infinity_instead(self, provider: str) -> None:
         kernel = Matern32(0.4, 2.0)
         grid = np.array([1.0, 1.0, 1.0])
         values = kernel.resolve(None)
         got = jax.jit(
-            lambda r: QuasisepGP().log_marginal_likelihood_jax(
+            lambda r: QuasisepGP(provider=provider).log_marginal_likelihood_jax(
                 kernel, grid, r, jnp.zeros(3), values
             )
         )(jnp.zeros(3))
         assert float(got) == -np.inf
 
-    def test_a_negative_variance_is_minus_infinity_on_the_traced_surface(self) -> None:
+    def test_a_negative_variance_is_minus_infinity_on_the_traced_surface(
+        self, provider: str
+    ) -> None:
         kernel = Matern32(0.4, 2.0)
         grid = np.linspace(1.0, 4.0, 4)
         values = kernel.resolve(None)
-        got = QuasisepGP().log_marginal_likelihood_jax(
+        got = QuasisepGP(provider=provider).log_marginal_likelihood_jax(
             kernel, grid, jnp.zeros(4), jnp.array([0.1, -1.0, 0.1, 0.1]), values
         )
         assert float(got) == -np.inf
 
-    def test_a_non_quasiseparable_kernel_is_refused_by_the_core_check(self) -> None:
+    def test_a_non_quasiseparable_kernel_is_refused_by_the_core_check(self, provider: str) -> None:
         from ampere.core.exceptions import LikelihoodError
 
         with pytest.raises(LikelihoodError, match="quasiseparable representation"):
-            QuasisepGP().check_compatible(SquaredExponential(0.4, 2.0), _quasisep_observed())
+            QuasisepGP(provider=provider).check_compatible(
+                SquaredExponential(0.4, 2.0), _quasisep_observed()
+            )
 
-    def test_a_kernel_with_no_builder_here_is_refused_by_name(self) -> None:
+    def test_a_kernel_with_no_builder_here_is_refused_by_name(self, provider: str) -> None:
         """The table is what routes a kernel to the O(N) path, so a family with
         no entry is refused rather than silently approximated. Declaring
         ``QUASISEPARABLE`` is a claim about the *mathematics*; holding an exact
@@ -1243,9 +1256,11 @@ class TestTheQuasiseparableSolver:
             FAMILY = "not_in_the_table"
 
         with pytest.raises(LikelihoodError, match="no exact celerite representation"):
-            QuasisepGP().check_compatible(Undeclared(0.4, 2.0), _quasisep_observed())
+            QuasisepGP(provider=provider).check_compatible(
+                Undeclared(0.4, 2.0), _quasisep_observed()
+            )
 
-    def test_the_leave_one_out_terms_agree_with_the_dense_closed_form(self) -> None:
+    def test_the_leave_one_out_terms_agree_with_the_dense_closed_form(self, provider: str) -> None:
         """The refusal is lifted (W2.5 slice 3), and this is what replaces it.
 
         ``DenseGP.conditional_loo`` forms ``(K + diag)**-1`` explicitly and
@@ -1257,7 +1272,7 @@ class TestTheQuasiseparableSolver:
         """
         kernel = Matern32(0.4, 2.0)
         values = kernel.resolve(None)
-        got = QuasisepGP().conditional_loo(
+        got = QuasisepGP(provider=provider).conditional_loo(
             kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, values
         )
         expected = DenseGP().conditional_loo(
@@ -1266,7 +1281,7 @@ class TestTheQuasiseparableSolver:
         assert got.shape == expected.shape
         assert got == pytest.approx(expected, abs=1e-8)
 
-    def test_the_leave_one_out_terms_survive_unsorted_coordinates(self) -> None:
+    def test_the_leave_one_out_terms_survive_unsorted_coordinates(self, provider: str) -> None:
         """The permutation is undone on the way out, as it is for the density."""
         rng = np.random.default_rng(19)
         coordinates = rng.uniform(0.0, 12.0, 45)
@@ -1274,17 +1289,17 @@ class TestTheQuasiseparableSolver:
         variance = np.full(45, 0.04)
         kernel = Matern32(0.4, 2.0)
         values = kernel.resolve(None)
-        assert QuasisepGP().conditional_loo(
+        assert QuasisepGP(provider=provider).conditional_loo(
             kernel, coordinates, residual, variance, values
         ) == pytest.approx(
             DenseGP().conditional_loo(kernel, coordinates, residual, variance, values), abs=1e-8
         )
 
-    def test_the_leave_one_out_terms_honour_the_jitter(self) -> None:
+    def test_the_leave_one_out_terms_honour_the_jitter(self, provider: str) -> None:
         """The jitter is part of the matrix, so both solvers must add it."""
         kernel = Matern32(0.4, 2.0)
         values = kernel.resolve(None)
-        assert QuasisepGP(jitter=0.05).conditional_loo(
+        assert QuasisepGP(jitter=0.05, provider=provider).conditional_loo(
             kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, values
         ) == pytest.approx(
             DenseGP(jitter=0.05).conditional_loo(
@@ -1293,19 +1308,19 @@ class TestTheQuasiseparableSolver:
             abs=1e-8,
         )
 
-    def test_a_single_sample_is_the_degenerate_case_and_is_still_right(self) -> None:
+    def test_a_single_sample_is_the_degenerate_case_and_is_still_right(self, provider: str) -> None:
         """N = 1 has no recursion at all; the scan would have nothing to scan."""
         kernel = Matern32(0.4, 2.0)
         values = kernel.resolve(None)
         one = np.array([2.0])
-        assert QuasisepGP().conditional_loo(
+        assert QuasisepGP(provider=provider).conditional_loo(
             kernel, one, np.array([0.3]), np.array([0.04]), values
         ) == pytest.approx(
             DenseGP().conditional_loo(kernel, one, np.array([0.3]), np.array([0.04]), values),
             abs=1e-10,
         )
 
-    def test_a_diagonal_that_cannot_be_a_covariance_is_refused(self) -> None:
+    def test_a_diagonal_that_cannot_be_a_covariance_is_refused(self, provider: str) -> None:
         """The contract path's preconditions apply here too."""
         from ampere.core.exceptions import LikelihoodError
 
@@ -1313,11 +1328,11 @@ class TestTheQuasiseparableSolver:
         broken = QUASISEP_VARIANCE.copy()
         broken[3] = -1.0
         with pytest.raises(LikelihoodError, match="negative entries"):
-            QuasisepGP().conditional_loo(
+            QuasisepGP(provider=provider).conditional_loo(
                 kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, broken, kernel.resolve(None)
             )
 
-    def test_the_pointwise_group_can_now_be_emitted_under_this_solver(self) -> None:
+    def test_the_pointwise_group_can_now_be_emitted_under_this_solver(self, provider: str) -> None:
         """What lifting the refusal actually buys (``results.md`` §6).
 
         ``add_pointwise_log_likelihood`` refuses by name under a solver with no
@@ -1325,7 +1340,9 @@ class TestTheQuasiseparableSolver:
         one it no longer has to.
         """
         kernel = Matern32(0.4, 2.0)
-        likelihood = Likelihood(GaussianFamily(), GaussianProcessNoise(kernel, QuasisepGP()))
+        likelihood = Likelihood(
+            GaussianFamily(), GaussianProcessNoise(kernel, QuasisepGP(provider=provider))
+        )
         observed = _quasisep_observed()
         predicted = Spectrum(
             QUASISEP_GRID * u.micron,
@@ -1337,21 +1354,49 @@ class TestTheQuasiseparableSolver:
         ).pointwise_log_prob(predicted, observed)
         assert terms == pytest.approx(dense, abs=1e-8)
 
-    def test_provenance_records_which_library_produced_the_numbers(self) -> None:
+    @pytest.mark.parametrize(
+        ("provider", "library"),
+        [("celerite2", "celerite2.jax"), ("scan", "ampere.jax.scan")],
+    )
+    def test_provenance_records_which_library_produced_the_numbers(
+        self, provider: str, library: str
+    ) -> None:
         """``inference.md`` §10a fold-in 10, and the question an archive will ask.
 
         The numpy and jax quasiseparable paths are the same *representation*
-        through different builds of the same library; nothing else in a run
-        distinguishes them.
+        through different recursions; since W7.10 the jax class has two of its
+        own, and nothing else in a run distinguishes them.
         """
-        config = dict(QuasisepGP().provenance_config())
-        assert config["library"] == "celerite2.jax"
+        config = dict(QuasisepGP(provider=provider).provenance_config())
+        assert config["library"] == library
+        assert config["provider"] == provider
         assert config["dtype"] == "float64"
         assert config["x64_policy_opt_out"] is False
 
-    def test_it_declares_the_batching_it_cannot_do(self) -> None:
-        """Not a limitation of jax: celerite2's primitives have no batching rule."""
+    def test_auto_chooses_celerite2_on_the_cpu(self) -> None:
+        """The device rule's CPU half (``performance_memo.md`` §9): the faster one."""
+        config = dict(QuasisepGP().provenance_config())
+        assert config["provider"] == "celerite2"
+        assert config["library"] == "celerite2.jax"
+        assert dict(QuasisepGP(device="cpu", provider="auto").provenance_config()) == config
+
+    def test_an_unknown_provider_is_refused_naming_the_three(self) -> None:
+        from ampere.core.exceptions import LikelihoodError
+
+        with pytest.raises(LikelihoodError, match=r"'auto'.*'celerite2'.*'scan'"):
+            QuasisepGP(provider="tinygp")
+
+    def test_it_declares_the_batching_each_provider_can_do(self) -> None:
+        """Per instance (W7.10): celerite2's primitives have no batching rule, the scan's do.
+
+        The class flag stays the celerite2 default; the scan instance shadows
+        it exactly as ``DEVICE`` is shadowed, which is what
+        ``ampere.core.declared_capabilities`` reads.
+        """
         assert QuasisepGP().BATCHABLE is False
+        assert QuasisepGP(provider="celerite2").BATCHABLE is False
+        assert QuasisepGP(provider="scan").BATCHABLE is True
+        assert QuasisepGP.BATCHABLE is False
         assert DenseGP().BATCHABLE is True
 
     def test_it_is_a_frozen_dataclass_with_only_jitter_in_the_spec(self) -> None:
@@ -1393,6 +1438,134 @@ class TestTheQuasiseparableSolver:
         )
         assert completed.returncode == 0, completed.stderr
         assert "ok" in completed.stdout
+
+
+class TestTheScanProvider:
+    """The ``lax.scan`` recursions (W7.10): element by element, then through the solver.
+
+    ``TestTheQuasiseparableSolver`` runs every density, conditioning and
+    refusal row on both providers. These rows say what that battery cannot:
+    that the scan computes *celerite2's* factorisation (not merely some
+    factorisation the solver happens to agree with), that it walks any rank
+    — a ``Sum`` and a warped kernel, not Matérn-3/2 alone — and that it
+    batches, which is the one thing the celerite2 provider cannot do.
+    """
+
+    @staticmethod
+    def _semiseparable(size: int, rank: int, seed: int) -> tuple[Any, ...]:
+        """A random positive-definite ``(t, c, a, U, V)`` of the given rank.
+
+        ``U_nj = alpha_j g_n`` and ``V_nj = g_n`` make ``K = diag(g) K₀ diag(g)``
+        with ``K₀`` a positive sum of exponentials, so the matrix is a
+        covariance whatever the draw, and nothing about it is Matérn-shaped.
+        """
+        rng = np.random.default_rng(seed)
+        t = jnp.asarray(np.sort(rng.uniform(0.0, 20.0, size)))
+        c = jnp.asarray(rng.uniform(0.2, 2.0, rank))
+        alpha = rng.uniform(0.5, 2.0, rank)
+        g = rng.uniform(0.5, 1.5, size)
+        U = jnp.asarray(alpha[None, :] * g[:, None])
+        V = jnp.asarray(np.repeat(g[:, None], rank, axis=1))
+        a = jnp.asarray(alpha.sum() * g**2 + 0.1)
+        return t, c, a, U, V
+
+    def test_each_operation_agrees_with_celerite2_at_rank_three(self) -> None:
+        """``d``, ``W`` and each of the three products, to 1e-10 relative."""
+        from ampere.backends.jax._quasisep import CELERITE2, SCAN
+
+        t, c, a, U, V = self._semiseparable(300, 3, seed=31)
+        rhs = jnp.asarray(np.random.default_rng(32).normal(size=(300, 2)))
+
+        def close(got: Any, expected: Any) -> bool:
+            got, expected = np.asarray(got), np.asarray(expected)
+            return bool(np.max(np.abs(got - expected)) <= 1e-10 * np.max(np.abs(expected)))
+
+        d_scan, w_scan = SCAN.factor(t, c, a, U, V)
+        d_ref, w_ref = CELERITE2.factor(t, c, a, U, V)
+        assert close(d_scan, d_ref)
+        assert close(w_scan, w_ref)
+        for operation in ("solve_lower", "solve_upper"):
+            assert close(
+                getattr(SCAN, operation)(t, c, U, w_ref, rhs),
+                getattr(CELERITE2, operation)(t, c, U, w_ref, rhs),
+            ), operation
+        assert close(SCAN.matmul_lower(t, c, U, V, rhs), CELERITE2.matmul_lower(t, c, U, V, rhs))
+
+    def test_a_failed_pivot_makes_the_whole_diagonal_nan(self) -> None:
+        """The failure signal every caller's guard is written against."""
+        from ampere.backends.jax._quasisep import SCAN
+
+        d, _ = SCAN.factor(
+            jnp.array([1.0, 1.0, 1.0]),
+            jnp.array([0.5]),
+            jnp.ones(3),
+            jnp.ones((3, 1)),
+            jnp.ones((3, 1)),
+        )
+        assert bool(jnp.all(jnp.isnan(d)))
+
+    def test_a_single_sample_needs_no_recursion(self) -> None:
+        from ampere.backends.jax._quasisep import SCAN
+
+        t, c, a, U, V = self._semiseparable(1, 2, seed=3)
+        d, W = SCAN.factor(t, c, a, U, V)
+        assert np.asarray(d) == pytest.approx(np.asarray(a))
+        assert np.asarray(W) == pytest.approx(np.asarray(V / a[:, None]))
+
+    def test_a_sum_of_rank_four_agrees_with_the_dense_solver(self) -> None:
+        """A Matérn-3/2 plus an SHO: rank 2 + 2, generators concatenated."""
+        from ampere.backends.jax import SHO, Sum
+
+        kernel = Sum(Matern32(0.5, 2.0), SHO(0.3, 6.0, 4.0))
+        values = kernel.resolve(None)
+        args = (kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, values)
+        expected = DenseGP().log_marginal_likelihood(*args)
+        assert QuasisepGP(provider="scan").log_marginal_likelihood(*args) == pytest.approx(
+            expected, abs=1e-6
+        )
+
+    def test_a_warped_kernel_agrees_with_the_dense_solver(self) -> None:
+        """W5.7's route: generators from the raw axis, the recursion over w(x)."""
+        from ampere.backends.jax import WarpedKernel
+
+        kernel = WarpedKernel(
+            Matern32(0.6, 2.0),
+            input_warp=(0.0, 12.0, 26.0, 40.0),
+            increments=(0.7, -0.5, 0.3),
+            input_scale=1.0,
+            amplitude_warp=(0.0, 20.0, 40.0),
+            levels=(0.25, -0.35, 0.4),
+            amplitude_scale=1.0,
+            non_centred=True,
+        )
+        values = kernel.resolve(None)
+        args = (kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, values)
+        expected = DenseGP().log_marginal_likelihood(*args)
+        assert QuasisepGP(provider="scan").log_marginal_likelihood(*args) == pytest.approx(
+            expected, abs=1e-6
+        )
+        assert QuasisepGP(provider="scan").conditional_loo(*args) == pytest.approx(
+            DenseGP().conditional_loo(*args), abs=1e-8
+        )
+
+    def test_the_traced_density_vmaps(self) -> None:
+        """What celerite2 cannot do: ``jax.vmap`` over the hyperparameters."""
+        kernel = _fitted_matern()
+        solver = QuasisepGP(provider="scan")
+
+        def density(parameters: Any) -> Any:
+            return solver.log_marginal_likelihood_jax(
+                kernel,
+                QUASISEP_GRID,
+                QUASISEP_RESIDUAL,
+                QUASISEP_VARIANCE,
+                {"amplitude": parameters[0], "length_scale": parameters[1]},
+            )
+
+        stack = jnp.asarray(np.random.default_rng(23).uniform([0.3, 1.0], [1.2, 4.0], (5, 2)))
+        batched = np.asarray(jax.vmap(density)(stack))
+        loop = np.array([float(density(row)) for row in stack])
+        assert batched == pytest.approx(loop, rel=1e-12)
 
 
 class TestTheReducedRankSolver:
@@ -1634,8 +1807,18 @@ class TestBatching:
         problem = _gp_problem(QuasisepGP())
         lowered = lower_problem(problem)
         assert lowered.batchable is False
-        with pytest.raises(LoweringError, match="QuasisepGP"):
+        with pytest.raises(LoweringError, match=r"QuasisepGP.*provider='scan'"):
             lowered.log_prob_unconstrained_batched(np.zeros((3, problem.free_size)))
+
+    def test_a_quasiseparable_problem_on_the_scan_provider_batches(self) -> None:
+        """W7.10: the one thing the celerite2 provider cannot be, the scan is."""
+        problem = _gp_problem(QuasisepGP(provider="scan"))
+        lowered = lower_problem(problem)
+        assert lowered.batchable is True
+        stack = np.random.default_rng(29).normal(scale=0.3, size=(4, problem.free_size))
+        batched = np.asarray(lowered.log_prob_unconstrained_batched(stack))
+        loop = np.array([float(np.asarray(lowered.log_prob_unconstrained(row))) for row in stack])
+        assert batched == pytest.approx(loop, rel=1e-12)
 
     def test_a_non_stack_is_refused(self) -> None:
         lowered = lower_problem(jax_joint_problem())
