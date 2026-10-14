@@ -387,6 +387,16 @@ across a factor of four in wavelength — and the Matérn-3/2 process is what
 absorbs the difference while the index is fitted: the page's theme, on a
 real file.
 
+At the block's budget the fit took about twelve minutes on one laptop core
+(the optimiser's warm start, then 16 000 evaluations of a 387-sample dense
+Gaussian process) and returned a median index of −1.60 with the GP's
+amplitude at about 1.2 mJy and its length scale at about 0.25 µm; emcee's
+diagnostics flagged the index (R-hat 1.11), so a fit meant to be quoted
+runs longer. That the index is shallower than −2 with a short-length-scale
+process beside it is the flexible likelihood doing its job, not a stellar
+measurement: the residual structure is the instrument's and the model's, and
+this page does not try to tell them apart.
+
 See also
 ---------
 
