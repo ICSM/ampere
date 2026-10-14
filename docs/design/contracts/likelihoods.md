@@ -2764,7 +2764,11 @@ Each is a decision, not an oversight. Each has an extension point.
   (`results_schema.md` §12): the observed filters must be exactly the chain's,
   in any order — each direction refused by name — the chain's wavelengths are
   adopted rather than compared, and `Dataset` keeps the observed container
-  re-keyed onto them (`align_by_filter`), once, at composition. `Likelihood.parameters` is a flat `ParameterSet` ready
+  re-keyed onto them (`align_by_filter`), once, at composition. *(Amended
+  W7.9.)* The rule applies to any two containers of one kind declaring
+  `FunctionSamples.IDENTITY` — `LineFluxes` by transition label as well as
+  `PhotometricPoints` by filter name — through `align_by_identity`, of which
+  `align_by_filter` is the photometric spelling. `Likelihood.parameters` is a flat `ParameterSet` ready
   to be one component of a single `ParameterSet.merge` across datasets — do not
   merge it again on its own. For a latent combination, `latent_declaration(n)`
   returns the extra parameter to include in that same merge; `n` is the number

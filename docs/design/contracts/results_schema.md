@@ -796,7 +796,14 @@ chain filter with no observation, and adopts the chain's own effective
 wavelengths — the observed container's spectral axis (a catalogue's pivot
 wavelengths, which differ from the step's in the second decimal) is not
 compared, and `Dataset` keeps the observed container re-keyed onto the
-chain's filters and wavelengths, once, at composition.
+chain's filters and wavelengths, once, at composition. *(Amended W7.9.)* The
+rule is not photometry's alone: it keys on the class attribute
+`FunctionSamples.IDENTITY`, the name of the extra coordinate whose unique
+labels are a sample's identity (`"filters"` here, `"transitions"` on
+`LineFluxes`, `None` — compared index by index — on every other kind), and
+`align_by_identity` applies it to any two containers of one kind declaring
+one; `align_by_filter` remains as the photometric spelling, its refusals
+unchanged.
 
 ```pycon
 >>> phot = PhotometricPoints(
@@ -811,6 +818,30 @@ chain's filters and wavelengths, once, at composition.
 Traceback (most recent call last):
     ...
 ampere.core.exceptions.SchemaError: PhotometricPoints was given repeated filter names ['W1']. A filter name is the identity of a photometric point, so duplicates make the channel ambiguous. Put repeat observations of one filter in separate channels, or disambiguate the names (e.g. 'WISE_W1_epoch1').
+
+```
+
+`LineFluxes` *(Added W7.9)* — one integrated flux per uniquely labelled
+transition, on the transitions' **rest** wavelengths (any order). The label is
+the identity (`IDENTITY = "transitions"`), so the photometric rule above
+applies word for word: duplicates are refused and alignment keys on the
+label, adopting the chain's rest wavelengths. The value unit is an energy flux
+(`W m⁻²`, or `erg s⁻¹ cm⁻²` converted once with `.to_unit`); like every kind's,
+it is validated as a unit, not by physical type. The family a line flux with
+an uncertainty is scored under is `GaussianFamily`, as for every kind — stated,
+not declared, since no kind carries a family.
+
+```pycon
+>>> from ampere.core import LineFluxes
+>>> lines = LineFluxes(
+...     ["[Ne III] 15.56", "[Ne II] 12.81"],
+...     [15.555, 12.814] * u.um,
+...     [1.2e-13, 3.1e-13] * u.erg / u.s / u.cm**2,
+... )
+>>> lines.transitions.tolist(), LineFluxes.IDENTITY
+(['[Ne III] 15.56', '[Ne II] 12.81'], 'transitions')
+>>> [f"{value:.2e}" for value in lines.to_unit(u.W / u.m**2).flux]
+['1.20e-16', '3.10e-16']
 
 ```
 

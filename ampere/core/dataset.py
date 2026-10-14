@@ -147,7 +147,8 @@ from .likelihood import (
     Likelihood,
     Marginalisation,
     NoiseModel,
-    align_by_filter,
+    align_by_identity,
+    identity_aligned,
 )
 from .parameter import (
     SEPARATOR,
@@ -160,7 +161,7 @@ from .parameter import (
     Value,
     log_density,
 )
-from .results_schema import FunctionSamples, ModelResult, PhotometricPoints
+from .results_schema import FunctionSamples, ModelResult
 from .rng import SEED_BYTES
 from .rng import generator as _generator
 from .realisation import realise, sample_observations_of, simulate_batched_of
@@ -1407,15 +1408,16 @@ class Dataset:
         is refused, so skipping it silently accepts a problem that cannot be
         evaluated.
 
-        :class:`~ampere.core.PhotometricPoints` align by filter name (W7.15):
-        the observed container is replaced, once, by its re-keying onto the
-        chain's filters and wavelengths (:func:`~ampere.core.likelihood.align_by_filter`),
-        so every consumer of :attr:`observed` sees the step's own axis.
+        A kind declaring an :attr:`~ampere.core.FunctionSamples.IDENTITY` —
+        :class:`~ampere.core.PhotometricPoints` by filter name (W7.15),
+        :class:`~ampere.core.LineFluxes` by transition label (W7.9) — aligns by
+        it: the observed container is replaced, once, by its re-keying onto the
+        chain's labels and coordinates
+        (:func:`~ampere.core.likelihood.align_by_identity`), so every consumer
+        of :attr:`observed` sees the step's own axis.
         """
-        if isinstance(predicted, PhotometricPoints) and isinstance(
-            self.observed, PhotometricPoints
-        ):
-            self.observed = align_by_filter(
+        if identity_aligned(predicted, self.observed):
+            self.observed = align_by_identity(
                 predicted, self.observed, censored=self.likelihood.censoring is not None
             )
         self.likelihood.check_alignment(predicted, self.observed)

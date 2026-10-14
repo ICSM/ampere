@@ -31,10 +31,10 @@ What lives here
     V(u,v), position(t) — and a container is a set of samples of it. There is
     no regular-grid assumption anywhere in this module.
 :class:`Spectrum`, :class:`PhotometricPoints`, :class:`Image`, :class:`Cube`,
-:class:`TimeSeries`, :class:`VisibilitySet`, :class:`ClosurePhases`
-    The kinds the plan enumerates, and the one Phase 4 added beside them. Each
-    fixes an axis signature, a layout, an ordering rule and whether its values
-    may be complex.
+:class:`TimeSeries`, :class:`VisibilitySet`, :class:`ClosurePhases`, :class:`LineFluxes`
+    The kinds the plan enumerates, the one Phase 4 added beside them, and
+    W7.9's line fluxes. Each fixes an axis signature, a layout, an ordering
+    rule and whether its values may be complex.
 :class:`Axis`
     One coordinate axis: name, values, unit, and the *advertised* structure
     (:attr:`Axis.regular`, :attr:`Axis.log_regular`) implementations may use to
@@ -48,8 +48,8 @@ sorted and deduplicated" assumption is the thing to kill. Every container kind
 therefore either *validates* its ordering rule at construction
 (:class:`Spectrum`, :class:`TimeSeries`, :class:`Image`, :class:`Cube`) or
 *documents* that it tolerates arbitrary order (:class:`PhotometricPoints`,
-:class:`VisibilitySet`, :class:`ClosurePhases`). Neither is left to the
-reader.
+:class:`LineFluxes`, :class:`VisibilitySet`, :class:`ClosurePhases`). Neither is
+left to the reader.
 
 **Regularity is advertised, never required.** :attr:`Axis.regular` and
 :attr:`Axis.log_regular` let an implementation choose FFT convolution or a
@@ -136,6 +136,7 @@ __all__ = [
     "FunctionSamples",
     "Image",
     "Layout",
+    "LineFluxes",
     "ModelResult",
     "Order",
     "PhotometricPoints",
@@ -657,6 +658,18 @@ class FunctionSamples:
     #: derived group is built — plotting-side infrastructure, not part of the
     #: frozen §4 contract's shape (D1 of Phase 4: a kind is class attributes).
     PLOT_COORDINATE: ClassVar[str | _PlotCoordinateFn | None] = None
+    #: The extra coordinate whose labels are the **identity** of a sample, for a
+    #: kind whose samples are named rather than positioned (``results_schema.md``
+    #: §12, *Amended W7.9*): ``"filters"`` on :class:`PhotometricPoints`,
+    #: ``"transitions"`` on :class:`LineFluxes`. The labels are unique,
+    #: one-dimensional and carried in ``extra_coords[IDENTITY]``, and such a
+    #: kind has exactly one axis. Composition aligns an observed container of
+    #: such a kind with the chain's prediction **by label**, in any order, and
+    #: adopts the chain's coordinates
+    #: (:func:`ampere.core.likelihood.align_by_identity`). ``None`` (the
+    #: default) means samples are compared index by index on equal axes, as
+    #: every other kind is.
+    IDENTITY: ClassVar[str | None] = None
 
     axes: tuple[Axis, ...]
     values: np.ndarray
@@ -1268,6 +1281,7 @@ class PhotometricPoints(FunctionSamples):
         ),
     )
     LAYOUT = Layout.POINTS
+    IDENTITY = "filters"
 
     def __init__(
         self,
@@ -1323,6 +1337,110 @@ class PhotometricPoints(FunctionSamples):
     @property
     def flux(self) -> np.ndarray:
         """Alias for :attr:`~FunctionSamples.values`."""
+        return self.values
+
+
+class LineFluxes(FunctionSamples):
+    """Integrated line fluxes: one value per named transition (*W7.9*).
+
+    The measurement a spectroscopist most often has — a table of emission-line
+    fluxes with uncertainties, each identified by a transition — as a kind of
+    its own. Three things are new against :class:`PhotometricPoints`, whose
+    template this is:
+
+    * **an identity**: the transition label (``"[Ne II] 12.81"``,
+      ``"H I 7-6"``) is what a sample *is*, so labels must be unique and are
+      carried as ``extra_coords["transitions"]``; composition aligns an
+      observed table with the chain's prediction by label, in any order
+      (:attr:`~FunctionSamples.IDENTITY`);
+    * **a rest wavelength** as the one axis — the transition's laboratory
+      wavelength (or frequency, or energy), not where the line was observed.
+      Order is tolerated as arbitrary, exactly as for photometry; the axis is
+      there so the lines can be plotted and so a correlated-residual kernel
+      has a distance to work with;
+    * **an energy-flux unit**: an integrated flux is ``W m⁻²`` (or
+      ``erg s⁻¹ cm⁻²``), not a flux density. The unit is validated only as a
+      unit, as for every kind; convert a table in ``erg s⁻¹ cm⁻²`` to the
+      chain's ``W m⁻²`` once with :meth:`~FunctionSamples.to_unit`.
+
+    The likelihood family a line flux with an uncertainty is scored under is
+    :class:`~ampere.core.GaussianFamily` — an integrated flux is a Gaussian
+    measurement, the default for every kind; ``PoissonFamily`` is wrong here,
+    since the value is a calibrated flux, not a count. Nothing in code declares
+    it: no kind carries a family.
+
+    >>> import astropy.units as u
+    >>> lines = LineFluxes(
+    ...     ["[Ne II] 12.81", "[Ne III] 15.56"],
+    ...     [12.814, 15.555] * u.um,
+    ...     [3.1e-16, 1.2e-16] * u.W / u.m**2,
+    ... )
+    >>> lines.transitions.tolist()
+    ['[Ne II] 12.81', '[Ne III] 15.56']
+    """
+
+    AXES = (
+        AxisSpec(
+            "spectral_axis", physical_types=("length", "frequency", "energy"), order=Order.ANY
+        ),
+    )
+    LAYOUT = Layout.POINTS
+    IDENTITY = "transitions"
+
+    def __init__(
+        self,
+        transitions: ArrayLike,
+        rest_wavelength: ArrayLike,
+        flux: ArrayLike,
+        *,
+        unit: object = None,
+        uncertainty: ArrayLike | None = None,
+        mask: ArrayLike | None = None,
+        extra_coords: Mapping[str, ArrayLike] | None = None,
+        fidelity: str | None = None,
+        meta: Mapping[str, Any] | None = None,
+    ) -> None:
+        names = np.asarray(transitions, dtype=str)
+        if names.ndim != 1:
+            raise SchemaError(
+                f"LineFluxes' transition labels must be a one-dimensional sequence, got shape "
+                f"{names.shape}."
+            )
+        unique, counts = np.unique(names, return_counts=True)
+        if bool(np.any(counts > 1)):
+            repeated = sorted(str(name) for name in unique[counts > 1])
+            raise SchemaError(
+                f"LineFluxes was given repeated transition labels {repeated}. A transition label "
+                f"is the identity of a line flux, so duplicates make the channel ambiguous. Put "
+                f"repeat measurements of one line in separate channels, or disambiguate the "
+                f"labels (e.g. '[Ne II] 12.81 (slit 2)')."
+            )
+        merged = dict(extra_coords or {})
+        merged["transitions"] = names
+        super().__init__(
+            {"spectral_axis": rest_wavelength},
+            flux,
+            unit=unit,
+            uncertainty=uncertainty,
+            mask=mask,
+            extra_coords=merged,
+            fidelity=fidelity,
+            meta=meta,
+        )
+
+    @property
+    def transitions(self) -> np.ndarray:
+        """The transition labels, in sample order."""
+        return self.extra_coords["transitions"]
+
+    @property
+    def rest_wavelength(self) -> Axis:
+        """The transitions' rest wavelengths (or frequencies/energies): the one axis."""
+        return self.axis("spectral_axis")
+
+    @property
+    def flux(self) -> np.ndarray:
+        """Alias for :attr:`~FunctionSamples.values`: the integrated fluxes."""
         return self.values
 
 

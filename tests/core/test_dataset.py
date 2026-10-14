@@ -2925,6 +2925,89 @@ class TestPhotometricAlignmentByName:
         assert align_by_filter(predicted, aligned) is aligned
 
 
+class TestLineFluxAlignmentByTransition:
+    """W7.9: W7.15's rule, generalised — a ``LineFluxes`` row mirrors each.
+
+    The rule keys on :attr:`~ampere.core.FunctionSamples.IDENTITY`, so a line
+    table aligns by transition label exactly as a catalogue aligns by filter
+    name: in any order, the chain's rest wavelengths adopted, the two
+    refusals by name, and no reordering under a ``Censoring``.
+    """
+
+    LABELS = ["[S IV] 10.51", "H I 7-6", "[Ne II] 12.81"]
+    REST = np.array([10.5105, 12.3719, 12.8135])
+
+    def predicted(self) -> Any:
+        from ampere.core import LineFluxes
+
+        return LineFluxes(self.LABELS, self.REST * u.um, np.ones(3) * u.W / u.m**2)
+
+    def observed(self, labels: list[str], rest: Any) -> Any:
+        from ampere.core import LineFluxes
+
+        return LineFluxes(
+            labels,
+            np.asarray(rest) * u.um,
+            np.arange(1.0, len(labels) + 1.0) * u.W / u.m**2,
+            uncertainty=np.full(len(labels), 0.1) * u.W / u.m**2,
+            extra_coords={"note": np.array([f"n{i}" for i in range(len(labels))])},
+        )
+
+    def test_a_table_in_another_order_on_rounded_wavelengths_is_re_keyed(self) -> None:
+        from ampere.core.likelihood import align_by_identity
+
+        labels = self.LABELS[::-1]
+        observed = self.observed(labels, np.round(self.REST[::-1], 2))
+        aligned = align_by_identity(self.predicted(), observed)
+        assert type(aligned).__name__ == "LineFluxes"
+        assert list(aligned.transitions) == self.LABELS
+        assert np.array_equal(aligned.rest_wavelength.values, self.REST)
+        assert aligned.flux.tolist() == [3.0, 2.0, 1.0]
+        assert aligned.extra_coords["note"].tolist() == ["n2", "n1", "n0"]
+        assert list(aligned.extra_coords)[-1] == "transitions"
+        assert align_by_identity(self.predicted(), aligned) is aligned
+
+    def test_an_observed_line_the_step_does_not_integrate_is_refused_by_name(self) -> None:
+        from ampere.core.likelihood import align_by_identity
+
+        observed = self.observed([*self.LABELS, "[Ne III] 15.56"], [*self.REST, 15.555])
+        with pytest.raises(LikelihoodError, match=r"\['\[Ne III\] 15.56'\] are not tabulated"):
+            align_by_identity(self.predicted(), observed)
+
+    def test_a_step_line_without_an_observation_is_refused_by_name(self) -> None:
+        from ampere.core.likelihood import align_by_identity
+
+        observed = self.observed(self.LABELS[:2], self.REST[:2])
+        with pytest.raises(LikelihoodError, match=r"\['\[Ne II\] 12.81'\] have no observation"):
+            align_by_identity(self.predicted(), observed)
+
+    def test_a_reordering_under_censoring_is_refused(self) -> None:
+        from ampere.core.likelihood import align_by_identity
+
+        observed = self.observed(self.LABELS[::-1], self.REST[::-1])
+        with pytest.raises(LikelihoodError, match="LineFluxes list their transitions"):
+            align_by_identity(self.predicted(), observed, censored=True)
+
+    def test_the_photometric_wrapper_is_the_general_rule(self) -> None:
+        """``align_by_filter`` keeps W7.15's imports; it is the same function underneath."""
+        from ampere.core.likelihood import align_by_filter, align_by_identity
+
+        predicted = PhotometricPoints(["a", "b"], [1.0, 2.0] * u.um, [1.0, 1.0] * u.Jy)
+        observed = PhotometricPoints(["b", "a"], [2.1, 0.9] * u.um, [5.0, 4.0] * u.Jy)
+        via_filter = align_by_filter(predicted, observed)
+        via_identity = align_by_identity(predicted, observed)
+        assert isinstance(via_filter, PhotometricPoints)
+        assert via_filter.filters.tolist() == via_identity.filters.tolist() == ["a", "b"]
+        assert via_filter.flux.tolist() == [4.0, 5.0]
+
+    def test_two_kinds_without_an_identity_are_refused(self) -> None:
+        from ampere.core.likelihood import align_by_identity
+
+        spectrum = Spectrum([1.0, 2.0] * u.um, [1.0, 1.0] * u.Jy)
+        with pytest.raises(LikelihoodError, match="declares an IDENTITY"):
+            align_by_identity(spectrum, spectrum)
+
+
 class TestPredict:
     """W7.15: ``FittingProblem.predict`` — the model curve at a point in one call."""
 
