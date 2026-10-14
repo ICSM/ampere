@@ -236,10 +236,8 @@ What you can fit
 Data arrive as plain arrays in containers (:class:`~ampere.core.Spectrum`,
 :class:`~ampere.core.Image`, :class:`~ampere.core.VisibilitySet`,
 :class:`~ampere.core.TimeSeries`) indexed by their coordinates, with masks
-for missing values and no assumption of a regular grid. This beta shipped no
-file readers; two have landed since (see Unreleased): OIFITS for
-interferometry, behind :mod:`ampere.interferometry`, and the JWST pipeline's
-one-dimensional ``x1d``/``c1d`` spectra, behind :mod:`ampere.spectroscopy`.
+for missing values and no assumption of a regular grid. There are no file
+readers yet (see the limitations below).
 
 The flexible likelihood
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -377,12 +375,9 @@ Known limitations at the beta
   CPU lowerings alone — on an accelerator it refuses by name, and ``DenseGP``
   or ``HilbertSpaceGP`` is the solver to use there. The torch quasiseparable
   solver has no such limit.
-* **No file readers in this beta.** Observations were built from arrays you
-  read yourself. Two readers have landed since (see Unreleased):
-  :func:`~ampere.interferometry.read_oifits` for OIFITS and
-  :func:`~ampere.spectroscopy.read_jwst` for JWST ``x1d``/``c1d`` spectra,
-  each behind its observable's front door, :mod:`ampere.interferometry` and
-  :mod:`ampere.spectroscopy`.
+* **No file readers yet.** Observations are built from arrays you read
+  yourself; an OIFITS reader for interferometric data is planned after the
+  beta.
 
 Deprecations
 ~~~~~~~~~~~~
