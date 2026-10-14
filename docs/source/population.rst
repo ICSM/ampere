@@ -494,8 +494,11 @@ itself about two widths. The population's other measurements, at the same run:
 ``python -m examples.m2_populations --backend jax --quick`` prints the same
 table; the shrinkage factor and the bias bounds are pinned in
 ``tests/m2/test_populations.py`` over three data seeds (spectrum 0 at 42, 142
-and 242) with the study's margin convention, and the reference path's emcee
-reaches the same conclusions at the marked budget (``pytest -m m2_full``).
+and 242) with the study's margin convention. The reference path's emcee, at
+the marked budget (``pytest -m m2_full``; 112 walkers x 1 600 steps, forty
+minutes for two arms), reproduces the shrinkage (1.92) and the floor but had
+not converged on the rest — fifty dimensions is past what an ensemble sampler
+explores at that cost — which is why the rows above are NUTS'.
 
 Simulation-based calibration on a population
 -------------------------------------------------
