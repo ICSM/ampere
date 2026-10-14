@@ -77,8 +77,15 @@ case "$cmd" in
     remote_script="$repo/scripts/cluster/gpu_rows.sbatch"
     echo "run.sh: checking out $tag in $repo on $cluster_name ..." >&2
     # shellcheck disable=SC2029
-    ssh "$ssh_alias" "cd $(printf %q "$repo") && git fetch --tags --quiet && git checkout --quiet $(printf %q "$tag") && echo \"at \$(git describe --tags --always) (\$(git rev-parse --short HEAD))\" && cat $(printf %q "$remote_script")"
+    # -n: ssh must not read stdin, or it swallows the answer a caller pipes to confirm() below.
+    ssh -n "$ssh_alias" "cd $(printf %q "$repo") && git fetch --tags --quiet && git checkout --quiet $(printf %q "$tag") && echo \"at \$(git describe --tags --always) (\$(git rev-parse --short HEAD))\" && cat $(printf %q "$remote_script")"
     echo >&2
+    # The compute node has no network, so `pixi run --frozen` there cannot rebuild the editable
+    # ampere-astro install when pyproject.toml changed since the environment was installed
+    # (job 18599844, 2026-10-14, died fetching setuptools-scm). Refresh on the login node first.
+    echo "run.sh: refreshing the gpu environment on $cluster_name's login node at $tag (network; --frozen) ..." >&2
+    # shellcheck disable=SC2029
+    ssh -n "$ssh_alias" "cd $(printf %q "$repo") && PIXI_HOME=$(printf %q "$pixi_home") PIXI_CACHE_DIR=$(printf %q "$pixi_home")/cache $(printf %q "$pixi_home")/bin/pixi install --frozen -e gpu && git status --short | head -n 3"
     echo "run.sh: the above is the script that will be submitted (modules: '${modules:-none}')." >&2
     confirm "Submit it for $tag on $cluster_name?"
     log_pattern="$fred/ampere/logs/gpu-$tag-%j.log"

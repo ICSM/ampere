@@ -854,7 +854,7 @@ Claude-Session: https://claude.ai/code/session_01Y4vLKdyyMpn1e2MTqixBwM
 
 **The per-release run** (the orchestrator, with Peter's word, against the tag the release gate names):
 
-1. `scripts/cluster/run.sh submit <tag>`: it checks the tag out in the cluster's clone, shows the exact `gpu_rows.sbatch` that will run, asks for confirmation, submits, records the job ID in `~/.cache/ampere-gates/gpu/submissions.txt` and prints the `sacct` line to watch it with.
+1. `scripts/cluster/run.sh submit <tag>`: it checks the tag out in the cluster's clone, **refreshes the `gpu` environment on the login node** (`pixi install --frozen -e gpu`; the compute node has no network, so a `pyproject.toml` that changed since the environment was installed would otherwise make `pixi run --frozen` try to rebuild the editable install there and die fetching `setuptools-scm` — job 18599844 on `1333659`, 2026-10-14), shows the exact `gpu_rows.sbatch` that will run, asks for confirmation (from a tool, pipe the answer with a delay — `(sleep 25; echo y) | run.sh submit <tag>` — the first ssh no longer reads stdin), submits, records the job ID in `~/.cache/ampere-gates/gpu/submissions.txt` and prints the `sacct` line to watch it with.
 2. When the job is done, `scripts/cluster/run.sh fetch <tag>`: it copies the log back through the data-mover host to `~/.cache/ampere-gates/gpu/<tag>.log`.
 3. Quote the pytest summary line `fetch` prints in the release's status row (the cluster appends a resource-usage epilogue after the job, so the summary is *not* the log's last line — `fetch` finds it by pattern); the log sits beside the status row as `~/.cache/ampere-gates/gpu/<tag>.log`.
 
