@@ -515,6 +515,8 @@ class JaxBackend:
         image=True,
         # Both, since W2.5 slice 2 chose celerite2.jax for the O(N) solve.
         solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP, SolverKind.HILBERT}),
+        # **W7.9**: the inheriting line-integration twin.
+        line_fluxes=True,
     )
 
     def __init__(self) -> None:
@@ -585,3 +587,19 @@ class JaxBackend:
 
     def to_numpy(self, values: Any) -> np.ndarray:
         return np.asarray(values)
+
+    def line_fluxes(self) -> LineFluxPieces:
+        # W7.9 -- appended.
+        return JAX_LINE_FLUXES
+
+
+# W7.9 -- appended at the end so a neighbouring item's edits merge cleanly.
+from ampere.backends.jax import LineIntegration as _LineIntegration  # noqa: E402
+
+from ..protocol import LineFluxPieces  # noqa: E402
+
+#: This backend's line-flux vocabulary, as one record (*W7.9*). The shipped
+#: class, unmodified: it declares ``BACKEND = "jax"`` and inherits the
+#: reference step's window geometry, so the composed problems in
+#: ``test_line_fluxes.py`` are single-backend ones.
+JAX_LINE_FLUXES = LineFluxPieces(line_integration=_LineIntegration)

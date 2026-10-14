@@ -19,22 +19,25 @@ than about arithmetic.
 second instrument binds the same channel, negotiation's union hands the step a
 larger, possibly reordered grid, and reading ``samples.values`` positionally
 against a response matrix is then silently wrong. :class:`SyntheticPhotometry`
-is this backend's instance of that shape, and
+and :class:`LineIntegration` (W7.9) are this backend's instances of that shape, and
 :meth:`~ampere.core.Axis.locate` — landed with this item — is how it stays
 correct.
 """
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Sequence
 from typing import Any, ClassVar
 
+import astropy.constants as const
 import astropy.units as u
 import numpy as np
 
 from ampere.core import (
     DTYPE,
     AxisRequirement,
+    LineFluxes,
     PhotometricPoints,
     Spectrum,
     Transformation,
@@ -45,9 +48,12 @@ from ampere.core import (
 from ._declare import as_parameter
 
 __all__ = [
+    "CONTINUA",
     "DETECTORS",
+    "WINDOW_UNITS",
     "CalibrationScale",
     "LSFConvolution",
+    "LineIntegration",
     "Resample",
     "SyntheticPhotometry",
     "bin_edges",
@@ -748,6 +754,360 @@ class SyntheticPhotometry(_Step):
                 _library_detector(name, curve) for name, curve in zip(names, curves, strict=True)
             ]
         return cls(names, grid, response, detector=detector, pivots=pivots, label=label)
+
+
+#: The window units :class:`LineIntegration` accepts, mapped to astropy units:
+#: a velocity half-width (the spectroscopist's unit, and the default) or a
+#: wavelength one.
+WINDOW_UNITS: dict[str, u.UnitBase] = {"km/s": u.km / u.s, "um": u.micron}
+
+#: The two continuum declarations :class:`LineIntegration` accepts. ``"none"``
+#: integrates the model as it is; ``"linear"`` subtracts, per draw, the straight
+#: line through the model's own values at the window's two edges.
+CONTINUA: tuple[str, ...] = ("none", "linear")
+
+#: The unit a :class:`LineIntegration` integrates *from* (a flux density per unit
+#: frequency) and the unit it integrates *to* (an energy flux).
+LINE_INPUT_UNIT = u.Jy
+LINE_FLUX_UNIT = u.W / u.m**2
+
+#: ``c`` in micron per second, times the jansky in W m⁻² Hz⁻¹: the factor that
+#: turns a Jy sample times a micron quadrature weight divided by a squared micron
+#: wavelength into W m⁻² (``dnu = c dlambda / lambda**2``).
+_JY_HZ_PER_MICRON = float((1.0 * u.Jy * const.c / u.micron).to_value(LINE_FLUX_UNIT))
+
+
+class LineIntegration(_Step):
+    """Integrate a spectrum over one window per emission line (*W7.9*).
+
+    ``Spectrum -> LineFluxes``: the kind-changing step a table of integrated
+    line fluxes is compared through. Each output is
+
+    .. math::
+
+        F_k = \\int_{\\mathrm{window}_k} \\left(F_\\nu - C_\\nu\\right)\\,d\\nu
+        \\quad [\\mathrm{W\\,m^{-2}}],
+
+    the model's flux density in **Jy**, on a **micron** grid, integrated over
+    frequency across the window around transition *k*'s rest wavelength, with
+    ``dnu = c dlambda / lambda**2``. ``∫F_λ dλ`` is the same number and is not
+    offered twice. :math:`C_\\nu` is the declared continuum:
+
+    ``continuum="none"``
+        Zero — the integral of the model as it is. Right when the model emits
+        the lines alone (a line ladder on no continuum), or when the
+        continuum is part of what the measurement is meant to include.
+    ``continuum="linear"``
+        The straight line (in wavelength) through the model's own values at
+        the window's two edges, subtracted **per draw**. A line table is
+        continuum-subtracted by the observer, so a model that carries a
+        continuum must be continuum-subtracted the same way before the two
+        are compared.
+
+    Both are linear in the model's samples, so the **whole step is one fixed
+    ``(n_lines, n_samples)`` influence matrix**, built once at construction:
+    ``SyntheticPhotometry``'s shape exactly. Each window is tabulated on
+    ``samples_per_window`` evenly spaced wavelengths from edge to edge, the
+    union of those grids is published as ``points=`` (the ``wavelength``
+    buffer, read with :meth:`tabulation`), and the columns are placed on the
+    negotiated axis through :meth:`~ampere.core.Axis.locate`
+    (``spectrum_photometry.md`` Gap 1), never positionally. The quadrature is
+    the trapezoid rule on each window's own grid — :func:`bin_edges`' midpoint
+    bins clipped at the window's edges, so no window borrows a sample's bin
+    from the gap beside it — with an error of order ``(h/λ)²`` for a spacing
+    ``h``. Overlapping windows are refused by name: a sample inside two
+    windows would have two owners.
+
+    The supported route is :meth:`from_observed`, which takes the transitions
+    and their rest wavelengths from the observed container (gap I-2).
+
+    Parameters
+    ----------
+    transitions
+        Transition labels, one per output line. Must be unique.
+    rest_wavelength
+        The transitions' rest wavelengths: micron, or a Quantity in any
+        spectral unit.
+    window
+        The window's **half**-width in ``window_unit``: one number for every
+        line, or one per line. A Quantity is converted to ``window_unit``.
+    window_unit
+        ``"km/s"`` (the default; the half-width is ``rest * v / c``) or
+        ``"um"``.
+    continuum
+        ``"none"`` (the default) or ``"linear"``; see above.
+    samples_per_window
+        Tabulation points per window, edges included. At least 3.
+    label
+        Component label for this step.
+    """
+
+    ACCEPTS: ClassVar[tuple[type, ...]] = (Spectrum,)
+    PRODUCES: ClassVar[type] = LineFluxes
+    BACKEND: ClassVar[str] = "reference"
+
+    def __init__(
+        self,
+        transitions: Sequence[str],
+        rest_wavelength: Any,
+        *,
+        window: Any,
+        window_unit: str = "km/s",
+        continuum: str = "none",
+        samples_per_window: int = 64,
+        label: str | None = None,
+    ) -> None:
+        super().__init__(label=label)
+        names = tuple(str(name) for name in transitions)
+        if len(set(names)) != len(names):
+            raise TransformationError(
+                f"LineIntegration was given repeated transition labels {sorted(names)}; a "
+                f"transition label is the identity of a line flux, so they must be unique."
+            )
+        rest = np.atleast_1d(_to_micron_spectral(rest_wavelength))
+        if rest.ndim != 1 or rest.size != len(names):
+            raise TransformationError(
+                f"LineIntegration needs one rest wavelength per transition: {len(names)} "
+                f"label(s) and {rest.size} wavelength(s)."
+            )
+        if not bool(np.all(np.isfinite(rest))) or not bool(np.all(rest > 0.0)):
+            raise TransformationError(
+                "LineIntegration needs finite, strictly positive rest wavelengths."
+            )
+        if window_unit not in WINDOW_UNITS:
+            raise TransformationError(
+                f"LineIntegration's window_unit must be one of {sorted(WINDOW_UNITS)}, got "
+                f"{window_unit!r}."
+            )
+        if continuum not in CONTINUA:
+            raise TransformationError(
+                f"LineIntegration's continuum must be one of {list(CONTINUA)}, got "
+                f"{continuum!r}: 'none' integrates the model as it is, 'linear' subtracts the "
+                f"straight line through its values at each window's edges."
+            )
+        if int(samples_per_window) != samples_per_window or samples_per_window < 3:
+            raise TransformationError(
+                f"LineIntegration needs at least 3 samples per window (two edges and an "
+                f"interior point), got {samples_per_window!r}."
+            )
+        windows = _window_half_widths(window, window_unit, len(names))
+        if window_unit == "km/s":
+            half = rest * windows / float(const.c.to_value(u.km / u.s))
+        else:
+            half = windows.copy()
+        if not bool(np.all(half < rest)):
+            raise TransformationError(
+                "LineIntegration's windows must not reach zero wavelength: a half-width is "
+                "larger than its rest wavelength."
+            )
+        lower, upper = rest - half, rest + half
+        order = np.argsort(rest, kind="stable")
+        for left, right in itertools.pairwise(order):
+            if lower[right] <= upper[left]:
+                raise TransformationError(
+                    f"the windows of {names[left]!r} ({lower[left]:.6g} to {upper[left]:.6g} um) "
+                    f"and {names[right]!r} ({lower[right]:.6g} to {upper[right]:.6g} um) overlap: "
+                    f"a sample inside both would have two owners. Narrow the windows, or "
+                    f"measure the blend as one line."
+                )
+        count = int(samples_per_window)
+        # Tabulated in rest-wavelength order, so the union is strictly
+        # increasing; each line's columns are a contiguous block of it.
+        grids = [np.linspace(lower[k], upper[k], count, dtype=DTYPE) for k in order]
+        tabulation = np.concatenate(grids)
+        weights = np.zeros((len(names), tabulation.size), dtype=DTYPE)
+        for block, line in enumerate(order):
+            grid = grids[block]
+            # The trapezoid rule as bin_edges' midpoint bins clipped at the
+            # window's own edges, then dnu = c dlambda / lambda**2 and Jy -> W m^-2.
+            edges = np.clip(bin_edges(grid), lower[line], upper[line])
+            row = np.diff(edges) * _JY_HZ_PER_MICRON / grid**2
+            if continuum == "linear":
+                # The continuum C(lambda_j) = F_lo (1 - t_j) + F_hi t_j is linear
+                # in the two edge samples, so subtracting its integral moves
+                # weight onto the first and last columns of this block.
+                t = (grid - lower[line]) / (upper[line] - lower[line])
+                left_share = float(np.sum(row * (1.0 - t)))
+                right_share = float(np.sum(row * t))
+                row = row.copy()
+                row[0] -= left_share
+                row[-1] -= right_share
+            weights[line, block * count : (block + 1) * count] = row
+        self._names = names
+        self._window_unit = window_unit
+        self._continuum = continuum
+        self._windows = windows
+        self._samples_per_window = count
+        self.register_buffer("wavelength", tabulation, unit=COORDINATE_UNIT)
+        self.register_buffer("weights", weights)
+        self.register_buffer("rest_wavelength", rest, unit=COORDINATE_UNIT)
+
+    @classmethod
+    def from_observed(
+        cls,
+        container: LineFluxes,
+        *,
+        window: Any = None,
+        window_unit: str = "km/s",
+        continuum: str = "none",
+        samples_per_window: int = 64,
+        label: str | None = None,
+    ) -> LineIntegration:
+        """The step for *container*'s lines: **the supported route** (gap I-2).
+
+        The transitions and their rest wavelengths are taken from the observed
+        container itself, never retyped, so the step's labels are exactly the
+        ones alignment will key on. The windows come from *window*, or — when
+        it is omitted — from the container's own ``extra_coords["window"]``
+        (per-line half-widths in ``window_unit``), the column a line table
+        that records its integration windows naturally has.
+        """
+        if not isinstance(container, LineFluxes):
+            raise TransformationError(
+                f"LineIntegration.from_observed reads the transitions from a LineFluxes "
+                f"container, got {type(container).__name__}."
+            )
+        if window is None:
+            if "window" not in container.extra_coords:
+                raise TransformationError(
+                    "LineIntegration.from_observed needs the window half-widths: pass "
+                    "window= (one number, or one per line, in window_unit), or carry them "
+                    "in the observed container's extra_coords['window']."
+                )
+            window = np.asarray(container.extra_coords["window"], dtype=DTYPE)
+        return cls(
+            [str(name) for name in container.transitions],
+            container.rest_wavelength.quantity(),
+            window=window,
+            window_unit=window_unit,
+            continuum=continuum,
+            samples_per_window=samples_per_window,
+            label=label,
+        )
+
+    def describe(self) -> dict[str, Any]:
+        """The window unit and the continuum declaration — configuration, not data.
+
+        ``results.md`` §13.13's hook: two plain attributes that change what
+        this step computes. The ``weights`` buffer already makes both visible
+        to a hash; this makes them legible in provenance.
+        """
+        return {"window_unit": self._window_unit, "continuum": self._continuum}
+
+    @property
+    def transitions(self) -> tuple[str, ...]:
+        """The transition labels, in output order."""
+        return self._names
+
+    @property
+    def window_unit(self) -> str:
+        """``"km/s"`` or ``"um"``."""
+        return self._window_unit
+
+    @property
+    def continuum(self) -> str:
+        """``"none"`` or ``"linear"``."""
+        return self._continuum
+
+    @property
+    def samples_per_window(self) -> int:
+        """Tabulation points per window, edges included."""
+        return self._samples_per_window
+
+    def windows(self) -> np.ndarray:
+        """The half-width per line, in :attr:`window_unit`, in output order."""
+        return self._windows.copy()
+
+    def tabulation(self) -> np.ndarray:
+        """The union of the window grids, micron, strictly increasing.
+
+        A method rather than a property: ``wavelength`` is a *buffer* name, and
+        a buffer may not shadow a class attribute (``parameters.md`` §10).
+        """
+        return self._data("wavelength")
+
+    def rest_wavelengths(self) -> np.ndarray:
+        """The rest wavelengths, micron, in output order — the output's axis."""
+        return self._data("rest_wavelength")
+
+    def requirements(self) -> tuple[AxisRequirement, ...]:
+        """``points=`` at the exact tabulation the weights were built on."""
+        return (
+            AxisRequirement(
+                "spectral_axis",
+                unit=COORDINATE_UNIT,
+                points=self.tabulation(),
+            ),
+        )
+
+    def influence(self, axis: Any) -> np.ndarray:
+        """The ``(n_lines, n_samples)`` matrix against the whole of *axis*.
+
+        Columns go where :meth:`~ampere.core.Axis.locate` reports and every
+        other column is zero, so the same matrix is right for the values and
+        for the mask however much larger than this step's tabulation the
+        negotiated grid turned out to be (``spectrum_photometry.md`` Gap 1).
+        """
+        index = axis.locate(self.tabulation())
+        full = np.zeros((len(self._names), int(axis.size)), dtype=DTYPE)
+        full[:, index] = self._data("weights")
+        return full
+
+    def check_input_unit(self, samples: Any) -> None:
+        """Refuse a channel that is not a flux density in Jy, by name.
+
+        The weights carry the jansky's conversion to W m⁻² Hz⁻¹, and the
+        native twins' ``apply_flux`` sees bare numbers with no unit to check,
+        so the contract path — which every composition runs once, at
+        ``check_alignment`` — is where a model in any other unit is stopped,
+        rather than integrated silently on one path and not the other.
+        """
+        if samples.unit != LINE_INPUT_UNIT:
+            raise TransformationError(
+                f"LineIntegration integrates a flux density in Jy, and the channel it was "
+                f"given is in {samples.unit}. Emit the model's flux in Jy (a model in mJy, "
+                f"or in W m^-2 Hz^-1, converts its output once), so the step's W m^-2 are "
+                f"the same number on every backend."
+            )
+
+    def apply(self, samples: Any, values: Any) -> LineFluxes:
+        self.check_input_unit(samples)
+        weights = self.influence(samples.spectral_axis)
+        return LineFluxes(
+            self._names,
+            self.rest_wavelengths() * COORDINATE_UNIT,
+            weights @ np.asarray(samples.values, dtype=DTYPE),
+            unit=LINE_FLUX_UNIT,
+            mask=propagate_mask(samples, weights),
+        )
+
+
+def _window_half_widths(window: Any, unit: str, count: int) -> np.ndarray:
+    """One positive, finite half-width per line, in *unit*."""
+    if isinstance(window, u.Quantity):
+        window = window.to_value(WINDOW_UNITS[unit])
+    widths = np.asarray(window, dtype=DTYPE)
+    if widths.ndim == 0:
+        widths = np.full(count, float(widths), dtype=DTYPE)
+    if widths.shape != (count,):
+        raise TransformationError(
+            f"LineIntegration needs one window half-width, or one per line ({count}), got "
+            f"shape {widths.shape}."
+        )
+    if not bool(np.all(np.isfinite(widths))) or not bool(np.all(widths > 0.0)):
+        raise TransformationError(
+            "LineIntegration's window half-widths must be finite and strictly positive."
+        )
+    return widths
+
+
+def _to_micron_spectral(coordinates: Any) -> np.ndarray:
+    """Like :func:`_to_micron`, but a frequency or energy converts too."""
+    if isinstance(coordinates, u.Quantity):
+        return np.asarray(
+            coordinates.to_value(COORDINATE_UNIT, equivalencies=u.spectral()), dtype=DTYPE
+        )
+    return np.asarray(coordinates, dtype=DTYPE)
 
 
 def _library_detector(name: str, curve: Any) -> str:

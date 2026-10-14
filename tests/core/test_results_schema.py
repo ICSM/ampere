@@ -25,6 +25,7 @@ from ampere.core import (
     FunctionSamples,
     Image,
     Layout,
+    LineFluxes,
     ModelResult,
     Order,
     PhotometricPoints,
@@ -826,6 +827,52 @@ class TestPhotometricPoints:
     def test_filter_list_must_be_one_dimensional(self) -> None:
         with pytest.raises(SchemaError, match="one-dimensional"):
             PhotometricPoints(np.array([["a"], ["b"]]), [1.0, 2.0] * u.um, [1.0, 1.0])
+
+
+class TestLineFluxes:
+    """W7.9: the line-flux kind, on ``PhotometricPoints``' template."""
+
+    def test_transitions_are_carried_and_ordered_with_the_samples(self) -> None:
+        lines = LineFluxes(
+            ["[Ne II] 12.81", "[Ne III] 15.56"],
+            [12.814, 15.555] * u.um,
+            [3.0e-16, 1.0e-16] * u.W / u.m**2,
+        )
+        assert lines.transitions.tolist() == ["[Ne II] 12.81", "[Ne III] 15.56"]
+        assert lines.rest_wavelength.values.tolist() == [12.814, 15.555]
+        assert lines.flux.tolist() == [3.0e-16, 1.0e-16]
+        assert lines.unit == u.W / u.m**2
+
+    def test_duplicate_transitions_are_refused(self) -> None:
+        with pytest.raises(SchemaError, match=r"repeated transition labels \['H I 7-6'\]"):
+            LineFluxes(["H I 7-6", "H I 7-6"], [12.37, 12.37] * u.um, [1.0, 1.0] * u.W / u.m**2)
+
+    def test_the_transition_list_must_be_one_dimensional(self) -> None:
+        with pytest.raises(SchemaError, match="one-dimensional"):
+            LineFluxes(np.array([["a"], ["b"]]), [1.0, 2.0] * u.um, [1.0, 1.0] * u.W / u.m**2)
+
+    def test_unsorted_rest_wavelengths_are_fine(self) -> None:
+        lines = LineFluxes(["b", "a"], [15.0, 12.0] * u.um, [1.0, 2.0] * u.W / u.m**2)
+        assert lines.rest_wavelength.values.tolist() == [15.0, 12.0]
+
+    def test_an_erg_table_converts_to_si_with_to_unit(self) -> None:
+        lines = LineFluxes(
+            ["a"],
+            [12.0] * u.um,
+            [2.0e-13] * u.erg / u.s / u.cm**2,
+            uncertainty=[1.0e-14] * u.erg / u.s / u.cm**2,
+        )
+        converted = lines.to_unit(u.W / u.m**2)
+        assert isinstance(converted, LineFluxes)
+        np.testing.assert_allclose(converted.flux, [2.0e-16], rtol=1e-12)
+        np.testing.assert_allclose(converted.uncertainty, [1.0e-17], rtol=1e-12)
+        assert converted.transitions.tolist() == ["a"]
+
+    def test_the_identity_is_declared_on_the_named_kinds_only(self) -> None:
+        assert LineFluxes.IDENTITY == "transitions"
+        assert PhotometricPoints.IDENTITY == "filters"
+        assert FunctionSamples.IDENTITY is None
+        assert Spectrum.IDENTITY is None
 
 
 class TestGriddedKinds:

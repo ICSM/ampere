@@ -511,6 +511,7 @@ class MirrorBackend(ReferenceBackend):
         astrometry=True,
         joint_noise=True,  # W5.9
         image=True,
+        line_fluxes=True,  # W7.9
     )
 
     def model(self, spec: ModelSpec) -> Model:
@@ -567,3 +568,24 @@ class MirrorBackend(ReferenceBackend):
 
     def parameter_space(self, declaration: ParameterSet) -> MirrorParameterSpace:
         return MirrorParameterSpace(declaration)
+
+    def line_fluxes(self) -> LineFluxPieces:
+        # W7.9 -- appended.
+        return MIRROR_LINE_FLUXES
+
+
+# W7.9 -- the line-flux vocabulary, appended at the end so a neighbouring
+# item's edits merge cleanly, and declared as this backend's for the same
+# reason as the vocabularies above.
+from ampere.backends.reference import LineIntegration  # noqa: E402
+
+from ..protocol import LineFluxPieces  # noqa: E402
+
+
+class MirrorLineIntegration(LineIntegration):
+    """The line-integration step, declared as this backend's (W7.9)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+MIRROR_LINE_FLUXES = LineFluxPieces(line_integration=MirrorLineIntegration)

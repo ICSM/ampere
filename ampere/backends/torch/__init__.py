@@ -212,6 +212,7 @@ from .image import (
 from .instrument import (
     DETECTORS,
     CalibrationScale,
+    LineIntegration,
     LSFConvolution,
     Resample,
     SyntheticPhotometry,
@@ -300,6 +301,7 @@ __all__ = [
     "IndependentNoise",
     "JointGaussianProcessNoise",
     "LSFConvolution",
+    "LineIntegration",
     "LoweredParameters",
     "LoweredPrior",
     "LoweredProblem",

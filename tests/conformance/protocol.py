@@ -551,6 +551,12 @@ class BackendCapabilities:
     #: are: one item's slice must not be a change to every other track's
     #: fixture.
     joint_noise: bool = False
+    # W7.9 -- appended, not interleaved.
+    #: Whether :meth:`ConformanceBackend.line_fluxes` can return this backend's
+    #: line-integration step (``Spectrum -> LineFluxes``). ``False`` by default,
+    #: for the same reason ``astrometry`` and ``image`` are: one modality's slice
+    #: must not be a change to every other track's fixture.
+    line_fluxes: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -653,6 +659,28 @@ class ImagePieces:
     psf_convolution: type
     gaussian_source: type
     binary: type
+
+
+@dataclasses.dataclass(frozen=True)
+class LineFluxPieces:
+    """The line-flux classes one backend supplies (*W7.9*).
+
+    The same shape as :class:`AstrometryPieces` and for the same reason: there
+    is no step registry, so association with the reference implementation is
+    by class name in the backend's own ``instrument`` module, the native
+    surface it exposes, and its ``BACKEND`` declaration. The model a line
+    table is integrated from is the battery's own ``POWER_LAW`` or ``LINEAR``
+    kind (:meth:`ConformanceBackend.model`), so the record holds the step
+    alone.
+
+    ``line_integration``
+        ``Spectrum -> LineFluxes``, built with
+        ``from_observed(container, window=..., window_unit=..., continuum=...)``
+        or with the constructor's ``(transitions, rest_wavelength, *,
+        window, ...)``.
+    """
+
+    line_integration: type
 
 
 @runtime_checkable
@@ -821,6 +849,16 @@ class ConformanceBackend(Protocol):
         The battery's oracles are ``scipy`` and closed forms, which speak
         numpy. A backend working in torch or jax arrays converts here — and
         only here, so no row has to know.
+        """
+
+    def line_fluxes(self) -> LineFluxPieces:
+        """This backend's line-integration step (*W7.9*).
+
+        Only called when :attr:`BackendCapabilities.line_fluxes` is declared; a
+        backend that has not written it may raise, and every line-flux row
+        then skips with a reason naming what is owed. The kind it speaks in,
+        :class:`~ampere.core.LineFluxes`, is ``ampere.core``'s own — D1's
+        placement once more.
         """
 
 

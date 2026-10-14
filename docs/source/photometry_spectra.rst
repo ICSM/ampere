@@ -408,6 +408,8 @@ See also
 * :mod:`ampere.spectroscopy` — the front door's API page, and
   :func:`~ampere.spectroscopy.read_jwst`'s full statement of what it reads,
   masks and refuses.
+* :doc:`line_fluxes` — the same model compared with a table of integrated
+  emission-line fluxes instead of a spectrum.
 * :doc:`astrometry` — another worked example of
   :class:`~ampere.core.GaussianProcessNoise` against an injected systematic,
   on a very different kind of axis (time, not wavelength).
