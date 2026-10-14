@@ -51,13 +51,17 @@ stops scaling at 10³ points.
 **W7.10 found where that cost lives, and wrote the scan anyway.** It is not the
 recursion's: XLA's CPU backend makes each iteration of a ``scan`` that stacks
 per-step outputs cost time proportional to N, and unrolling the loop by two
-removes it (``performance_memo.md`` §9). ampere's scan provider
+removes it; and jax's reverse mode through the scan is superlinear again
+whenever the per-step decays carry no tangent (the amplitude differentiated
+with the length scale fixed), which one tied line removes
+(``performance_memo.md`` §9 has both measurements). ampere's scan provider
 (:mod:`ampere.backends.jax._quasisep`), the same recursions in pure ``jnp``
-over the same rank-J arrays, is linear on the CPU — about 2.8 µs per
-point for a value and gradient against celerite2's 0.4, so seven times
-slower — and it is what :class:`QuasisepGP` runs on an accelerator, where
-celerite2 cannot run at all. On the CPU celerite2 stays the default; the scan
-is there by name (``provider="scan"``) for batching and for CI.
+over the same rank-J arrays, is linear on the CPU — 2.1-2.7 µs per point for
+a value and gradient from 10³ to 10⁶ against celerite2's 0.3-0.4, six to
+nine times slower — and it is what :class:`QuasisepGP` runs on an
+accelerator, where celerite2 cannot run at all. On the CPU celerite2 stays
+the default; the scan is there by name (``provider="scan"``) for batching
+and for CI.
 
 **Accuracy.** Both agree with the dense Cholesky far inside
 ``tolerances.cross_solver`` (1e-6), and both agree with

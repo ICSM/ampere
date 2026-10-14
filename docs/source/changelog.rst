@@ -181,7 +181,7 @@ Unreleased
   ``vmap`` (``QuasisepGP(provider="scan").BATCHABLE`` is true, so
   ``log_prob_unconstrained_batched`` works on a quasiseparable problem). The
   default chooses by the device you ask for: celerite2 on the CPU, where it is
-  about seven times faster, and the scan anywhere else, so
+  six to nine times faster, and the scan anywhere else, so
   ``QuasisepGP(device="cuda")`` now fits instead of refusing. The run's
   provenance records which one computed the numbers (``library`` and
   ``provider`` in the solver's configuration); the answers agree to rounding.

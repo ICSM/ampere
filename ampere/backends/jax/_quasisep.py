@@ -91,7 +91,10 @@ Gradients and failure
 ---------------------
 The scan provider has **no custom VJP**: a ``scan`` is differentiable, and
 jax's reverse mode saves one carry per step, O(N J²) memory — measured in
-``docs/design/performance_memo.md`` §9. A failed factorisation (a pivot
+``docs/design/performance_memo.md`` §9. Two things make that reverse mode
+linear in N rather than quadratic in practice, both measured there: the loop
+is unrolled by two (:data:`_UNROLL`), and the decays are given a tangent
+whenever the generators have one (:func:`_with_tangent`). A failed factorisation (a pivot
 ``d_n`` that is not positive and finite) makes the **whole** of ``d`` NaN,
 the torch shim's convention: every caller then sees a non-finite number
 wherever ``d`` enters — the log-determinant, a division, a square root —
@@ -222,8 +225,32 @@ class _Celerite2Provider(QuasisepProvider):
 #: with ``unroll=1`` XLA's CPU backend makes every iteration of a ``scan`` that
 #: stacks per-step outputs cost time proportional to N — the "quadratic in
 #: practice" W2.5 slice 2 measured on tinygp — while any unroll of two or more
-#: keeps the loop linear. Two was the fastest of 2, 8, 16, 32 and 64.
+#: keeps the loop linear. Two was the fastest of 2, 8, 16, 32 and 64. Measured
+#: again at the review with both hyperparameters traced: 52 and 134 µs per
+#: point at 10⁴ and 3e4 with ``unroll=1`` against 2.5 and 2.1 with two.
 _UNROLL = 2
+
+
+def _with_tangent(c: Any, *generators: Any) -> jax.Array:
+    """``c`` exactly, but carrying a tangent whenever any generator does.
+
+    The second scaling trap (``performance_memo.md`` §9, the review's table):
+    jax's reverse mode through a ``scan`` is linear in N when the per-step
+    decays ``p_n`` carry a tangent and **superlinear when they do not** — 2.3 µs
+    per point at every size with the length scale differentiated, 13 at 10⁴
+    and 120 at 10⁵ with the length scale a constant, a traced-but-undifferentiated
+    argument or under ``stop_gradient`` — the amplitude alone being
+    differentiated, which is an ordinary fit. Adding ``0.0 * (a generator's
+    first element)`` changes no value (XLA does not fold a floating-point
+    ``x * 0``, since ``x`` could be non-finite; the measurement is what shows
+    the tie survives) and gives the rates a zero tangent whenever the
+    generators have one, which is whenever anything is differentiated through
+    this operation at all. The generators are finite wherever the recursion
+    is defined; the diagonal ``a`` is deliberately not used, since a
+    non-finite entry there would turn the tie into a NaN.
+    """
+    tie = sum(jnp.ravel(g)[0] for g in generators)
+    return c + 0.0 * tie
 
 
 def _decays(t: Any, c: Any) -> jax.Array:
@@ -258,9 +285,8 @@ class _ScanProvider(QuasisepProvider):
             return (state, d_n, w_n), (d_n, w_n)
 
         initial = (jnp.zeros((rank, rank), dtype=U.dtype), first_d, first_w)
-        _, (d_rest, w_rest) = jax.lax.scan(
-            step, initial, (_decays(t, c), a[1:], U[1:], V[1:]), unroll=_UNROLL
-        )
+        rows = (_decays(t, _with_tangent(c, U, V)), a[1:], U[1:], V[1:])
+        _, (d_rest, w_rest) = jax.lax.scan(step, initial, rows, unroll=_UNROLL)
         d = jnp.concatenate([first_d[None], d_rest])
         W = jnp.concatenate([first_w[None, :], w_rest], axis=0)
         # A failed pivot poisons the whole of d (the module docstring's
@@ -277,7 +303,8 @@ class _ScanProvider(QuasisepProvider):
             return (state, z_n), z_n
 
         initial = (jnp.zeros((U.shape[1], Y.shape[1]), dtype=Y.dtype), Y[0])
-        _, rest = jax.lax.scan(step, initial, (_decays(t, c), U[1:], W[:-1], Y[1:]), unroll=_UNROLL)
+        rows = (_decays(t, _with_tangent(c, U, W, Y)), U[1:], W[:-1], Y[1:])
+        _, rest = jax.lax.scan(step, initial, rows, unroll=_UNROLL)
         return jnp.concatenate([Y[:1], rest], axis=0)
 
     def solve_upper(self, t: Any, c: Any, U: Any, W: Any, Y: Any) -> jax.Array:
@@ -290,7 +317,11 @@ class _ScanProvider(QuasisepProvider):
 
         initial = (jnp.zeros((U.shape[1], Y.shape[1]), dtype=Y.dtype), Y[-1])
         _, rest = jax.lax.scan(
-            step, initial, (_decays(t, c), U[1:], W[:-1], Y[:-1]), reverse=True, unroll=_UNROLL
+            step,
+            initial,
+            (_decays(t, _with_tangent(c, U, W, Y)), U[1:], W[:-1], Y[:-1]),
+            reverse=True,
+            unroll=_UNROLL,
         )
         return jnp.concatenate([rest, Y[-1:]], axis=0)
 
@@ -301,9 +332,8 @@ class _ScanProvider(QuasisepProvider):
             return state, u_n @ state
 
         initial = jnp.zeros((U.shape[1], Y.shape[1]), dtype=Y.dtype)
-        _, rest = jax.lax.scan(
-            step, initial, (_decays(t, c), U[1:], V[:-1], Y[:-1]), unroll=_UNROLL
-        )
+        rows = (_decays(t, _with_tangent(c, U, V, Y)), U[1:], V[:-1], Y[:-1])
+        _, rest = jax.lax.scan(step, initial, rows, unroll=_UNROLL)
         return jnp.concatenate([jnp.zeros_like(Y[:1]), rest], axis=0)
 
 
