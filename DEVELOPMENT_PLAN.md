@@ -1139,8 +1139,8 @@ Not scheduled, but the contracts must not paint them out:
   itself is the Phase 5 bullet above; nothing before it may fix a call
   signature that leaves no room for a context.
 
-### Phase 7 — Hierarchy, derived parameters, the second reader
-*(Drafted as agent-sized items 2026-10-05 — `WORK_ITEMS.md`'s Phase 7 section, W7.0–W7.11 with decisions D1–D11; **ruled by Peter the same day, every decision as recommended**. The first phase after the beta; the bullets below are the source the items execute.)*
+### Phase 7 — Hierarchy, derived parameters, the second reader — **complete 2026-10-15**
+*(Drafted as agent-sized items 2026-10-05 — `WORK_ITEMS.md`'s Phase 7 section, W7.0–W7.17 with decisions D1–D11; **ruled by Peter the same day, every decision as recommended**; the user-journeys fillers W7.12–W7.17 ruled 2026-10-06 and 2026-10-08. **Closed 2026-10-15 with W7.8's release of `ampere-astro 1.0.0b2`** — eighteen items merged, every one closed on CI; the decision-log rows "The second beta `1.0.0b2` (W7.8)" and "Phase 8 opened (D1–D12)" are the record. The bullets below are the source the items executed.)*
 - **The two design items of the W6.11 memo**
   (`docs/design/nuisance_populations_and_derived_memo.md`), whose
   implementation Phase 6's D8 placed here: the `Derived` parameter node
