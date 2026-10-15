@@ -4269,7 +4269,7 @@ their rows record the three legs.
   **Recommended: the `Censoring` filler and the migration-page note in
   this phase; the rest stays recorded.**
   **Ruled 2026-10-05: the `Censoring` filler (W7.11) and the migration-page note (in W7.5); the rest stays recorded.**
-## Phase 8 — Any model, any data: the foreign function, the radial profile, the readers (drafted 2026-10-15 by Fable; **awaiting Peter's rulings D1–D12 below**; the sources are `docs/design/horizon_beyond_phase7.md` §9's shape re-ranked by `docs/design/user_journeys_memo.md` §6 and §8.1a, and the horizon memo's §12 item)
+## Phase 8 — Any model, any data: the foreign function, the radial profile, the readers (drafted 2026-10-15 by Fable; **ruled by Peter 2026-10-15: D2–D9 as recommended, D10 after PR #82 merges, D11 the filter bundle removed at `1.0.0` or the first release candidate, D12 no software paper now, D1 after the radial-profiles memo — W8.16 added, W8.2 rewritten**; the sources are `docs/design/horizon_beyond_phase7.md` §9's shape re-ranked by `docs/design/user_journeys_memo.md` §6 and §8.1a, and the horizon memo's §12 item)
 
 The second phase after the beta, and the first whose items come from
 the two memos written at Phase 7's opening rather than from a design memo
@@ -4362,41 +4362,78 @@ posterior at the engines' tolerance; `nested`'s evidence against
 dynesty's at the nested engines' tolerance); the SBI page's engine table
 and `inference.md`'s engine list amended; gates jax.
 
-### W8.2 — Radial profiles and azimuthal symmetry: the kind, the steps, the models, the disc example [L; Opus] (horizon §3; D1)
-The modality template, both readings in one item (D1): the kind
-`RadialProfile` (coordinate `r` in angular units, value a surface
-brightness, `Layout.POINTS`); the steps `Deproject` (`VisibilitySet →
-VisibilitySet`: inclination, position angle and offset as parameters,
-coordinates rotated and scaled, the phase ramp applied — the first
-`Derived` customers outside the W6.11 memo: a ring's width as a ratio of
-radii, `cos i` from an aspect ratio), `HankelTransform` (`RadialProfile →
-VisibilitySet` at the deprojected baseline lengths; a dense `N_ρ × N_r`
-quadrature of `2π ∫ I(r) J₀(2πρr) r dr` at the sizes that matter, the
-discrete Hankel transform as the large-N route, `J₀` from
-`jax.scipy.special.bessel_jn` / `torch.special.bessel_j0` — no foreign
-function), `Render` (`RadialProfile → Image` on a pixel grid, for the
-image and photometry routes) and `AzimuthalAverage` (`Image →
-RadialProfile`, the observed-side step); models `GaussianRing`,
-`PowerLawDisc` with gaps, `Sersic`, and `LatentProfile` — the profile as
-a latent GP in `log r` through the `CONSUMES_LATENT_GP` opt-in, which
-makes the `frank`-style non-parametric fit a declaration; the
-conformance rows (the uniform disc's Hankel transform against
-`UniformDiscVisibilities`, the Gaussian's against
-`GaussianSourceVisibilities`, `Render` then `FourierSample` against the
-direct `HankelTransform`, `AzimuthalAverage` of a rendered profile
-recovering it, every step on the three backends); `transformations.md`
-§10's Hankel slot filled and the `results_schema.md` §12 paragraph with
-a doctest; the decision-log row. The worked example on real data: a
-public ALMA continuum uv table (a DSHARP disc, or the small set `frank`
-ships) through W8.12's reader — or, if W8.12 has not landed, a VLTI set
-through `read_oifits` — fitted as a parametric disc plus a GP correction
-in `r`, which is the misspecification story on a new axis; `frank`'s
-published profile as the comparison figure. Page `radial_profiles.rst`
-in the template's nine sections. **Depends:** W7.0 (merged); W8.12 for
-the ALMA example (else the VLTI route). **Accept:** the conformance
-columns green on the three backends; the example's measured numbers
-pinned over three seeds in the page; the decision-log row; the four
-plots run on the new kind; gates all three.
+### W8.2 — Radial profiles and azimuthal symmetry: the kind, the steps, the models, the U Ant example [L; Opus] (horizon §3; `docs/design/modalities/radial_profiles.md`; D1 ruled 2026-10-15)
+**Read the memo first** — `docs/design/modalities/radial_profiles.md` is the
+design (§2 the three routes, §3 why each piece is a kind or a linear step,
+§4 the covariance, §5 the declarations, §6 the order, §8 the four-dataset
+scenario); this text points at it. The kind **`RadialProfile`**: one axis
+`r` (angle), values a surface brightness with the unit carried, `Layout.POINTS`,
+**and an optional spectral axis** exactly as `VisibilitySet` gained one at
+W4.1 (ruled 2026-10-15; the CO(3–2) profile against radius and velocity is
+the first customer) — three class attributes and the §12 paragraph with a
+doctest. **The steps**, every one linear with an `influence` matrix on
+`Resample`'s pattern, on the three backends: `Render` (`RadialProfile →
+Image` on the observed map's own axes, so `PSFConvolution`, the image
+likelihoods and the image GP solvers apply unchanged — Route A);
+`HankelTransform` (`RadialProfile → VisibilitySet` at `ρ = √(u²+v²)` per
+sample and per spectral channel, `V(ρ) = 2π ∫ I(r) J₀(2πρr) r dr` as a
+dense `N_ρ × N_r` quadrature planned once per grid, `J₀` native on both
+backends — Route C; the discrete Hankel transform recorded as the
+large-`N_r` route, not built); `BeamConvolution` (`RadialProfile →
+RadialProfile`, the 1-D convolution with a symmetric beam — a product in
+Hankel space or one dense matrix — per spectral channel); `Bin`
+(`RadialProfile → RadialProfile` onto the observed bin edges);
+`AzimuthalAverage` (`Image → RadialProfile` on the observed side, circular
+annuli about a centre, **and** `inclination=`/`position_angle=` for
+elliptical annuli — required, built after the circular case; sector
+averaging is **not** in the item) with **`covariance(variance_map, beam,
+mask=None)` returning `A C Aᵀ`** for white-plus-beam noise (a user-supplied
+`C` or beam autocorrelation otherwise), the memo's §4; `Deproject`
+(`VisibilitySet → VisibilitySet`: inclination, position angle and offset as
+the step's parameters, the coordinates rotated and scaled, the phase ramp
+applied; the identity at zero inclination, so a spherical source needs no
+step — its parameters the first `Derived` customers outside the W6.11
+memo). **The models**, written once as `I(r)` through `ArrayOps`:
+`ProjectedShell` with a single power law, a broken power law and a
+Gaussian-in-`r` density between inner and outer radii, projected along the
+line of sight (closed form for the power laws, quadrature otherwise) —
+Peter's first-cut list; `GaussianRing`; `PowerLawDisc` with gaps; `Sersic`;
+and **`LatentProfile`** — the profile's knot values in `log r` as `m(r) +
+L(θ) z` with `z` an array-valued standard-normal parameter and `L(θ)` the
+kernel's Cholesky factor (the non-centred GP the parameter contract admits
+today; no contract change), usable alone (frank's fit) and added to a
+parametric model (the deviation in `r`; **under SBI the misspecification-
+aware simulator**, memo §8.4), in the first cut. **The conformance rows**
+(memo §2, §4, §6): Route A against Route C on a synthetic shell;
+`HankelTransform` of `UniformDisc` against `UniformDiscVisibilities` and of
+a Gaussian against `GaussianSourceVisibilities`; `Render` → `FourierSample`
+against `HankelTransform`; `AzimuthalAverage` of a rendered profile
+recovering it, circular and elliptical; **the covariance row** — a profile
+fitted with `FixedCovarianceNoise(Σ_P)` (W8.16) recovering the injected
+shell with calibrated coverage where the naive diagonal does not (the
+probe's factor five); `LatentProfile` recovering an injected ring; every
+step on the three fixtures; the realised density at `cross_backend`.
+**The example**: **U Ant** (Peter, 2026-10-15; the data releasable where
+not public — the SCUBA-2 850 µm map with its variance array vendored as a
+cutout under `tests/data` with provenance, the ACA uv table through W8.12
+if its form is settled, else the map alone), fitted three ways on one
+object — the map (A), the averaged profile with its covariance (B), the
+visibilities (C) — and jointly, with a **synthetic twin** at NESS-like
+noise beside it for the rows; the disc case (DSHARP or `frank`'s small
+set) as the second figure with `LatentProfile` and `Deproject`. Page
+`radial_profiles.rst` in the template's nine sections, the memo's §8
+scenario as its closing section; `transformations.md` §10's Hankel slot
+filled and the new steps' rows; `results_schema.md` §12; the decision-log
+row (a §4 kind addition and five transformation additions). **Recorded,
+not built**: `PSFConvolution` on `Cube` and a `SpectralResponse` step on a
+cube's velocity axis (the IFU item's, Phase 9); the primary-beam taper on
+the uv route; the discrete Hankel transform. **Depends:** W7.0 (merged);
+**W8.16** (the covariance component — lands first); W8.12 for the ACA
+table (else the map route alone). **Accept:** the conformance columns
+green on the three backends; U Ant's three routes agreeing at the engines'
+tolerance with the numbers pinned over three seeds on the synthetic twin;
+the covariance row; the decision-log row; the four plots run on the new
+kind; gates all three.
 
 ### W8.3 — The emulator memo [M; Fable's own work between waves] (horizon §2 (b); D2)
 `docs/design/emulator_memo.md` on W6.11's pattern: the contract from a
@@ -4641,11 +4678,34 @@ deprecations still unchanged unless D6 rules `1.0.0b3` the last beta.
 `ampere-astro 1.0.0b3` on PyPI from its tag; the GPU rows green; the
 decision-log row dated; the section closed.
 
+### W8.16 — `FixedCovarianceNoise`: a covariance table on any observed container [S; Opus] (memo §4; lands before W8.2)
+A fourth noise component beside `IndependentNoise`, `GaussianProcessNoise`
+and `JointGaussianProcessNoise`: `FixedCovarianceNoise(matrix)` — a given
+positive semi-definite covariance over the observed samples (full, or
+block-diagonal per spectral channel), no free parameters, one Cholesky at
+construction, `sample` drawing correlated noise (so SBI's `simulate_many`
+carries it), entering the likelihood's sum of components as W5.8 defined
+it (`S = Σ_P + K(θ) + diag σ²`), on the three backends with the lowering
+rule; refusals by name for a non-symmetric, non-PSD or wrongly shaped
+matrix and for a masked sample the matrix still names. A §4.4 addition
+with its decision-log row (`likelihoods.md` §4's table, §15's limitation on
+"a known correlated instrument covariance" struck) and conformance rows: a
+Gaussian problem with a known covariance against `scipy.stats.multivariate_normal`
+at `exact`; the sum with a GP component against a dense construction; the
+`sample` draw's covariance recovered; coverage calibrated where the naive
+diagonal is not (the memo's §4 probe as the fixture). The customers named
+in the docs: an azimuthally averaged profile (W8.2), a photometric table
+with a published covariance (a Gaia or catalogue solution), a binned
+spectrum with a resampling covariance. **Depends:** nothing. **Accept:**
+the rows; `likelihoods.md` amended; the SED page's one paragraph; gates
+all three.
+
 **Ordering and waves** (two agents at a time; Fable's memo between
-waves). Wave 1: **W8.0** (ForeignModel) ∥ **W8.2** (radial profiles) —
-disjoint files (a model class and its flag; a kind and steps), both on
-the three backends, so their jax and torch legs run one at a time; Fable
-writes **W8.3** beside them. Wave 2: **W8.5** (photometry and the filter
+waves). Wave 1: **W8.0** (ForeignModel) ∥ **W8.16** (the covariance component,
+S) then **W8.2** (radial profiles) in that slot — disjoint files (a model
+class and its flag; a noise component; a kind and steps), all on the three
+backends, so their jax and torch legs run one at a time; Fable writes
+**W8.3** beside them. Wave 2: **W8.5** (photometry and the filter
 library) ∥ **W8.6** (compare); the fillers **W8.10**, **W8.12** in the
 free slots (W8.12 before W8.2's example is written if the timing allows,
 else W8.2 takes the VLTI route and W8.12's example row joins later).
@@ -4665,6 +4725,7 @@ reasoning is the horizon memo's §11 and the user-journeys memo's §5–§6.
   steps once the kind exists, and the frank-style example needs both), or
   the model side first with `AzimuthalAverage` an S follow-on.
   **Recommended: both, W8.2 as drafted.**
+  **Ruled 2026-10-15, after the design memo `docs/design/modalities/radial_profiles.md` and its §8 scenario: both readings; `RadialProfile` with an optional spectral axis; elliptical averaging after circular, no sectors; all three density laws and a Gaussian ring; `LatentProfile` in the first cut; the covariance component its own item (W8.16) before W8.2; U Ant the example with a synthetic twin.**
 - **D2 — the foreign function first, the emulator after its memo** (§10
   Q2, §11): W8.0 in wave 1 with W8.3 beside it and W8.4 in wave 3
   (recommended — an Opus item on day one and the memo's three undecided
