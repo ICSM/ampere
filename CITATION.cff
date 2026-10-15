@@ -5,8 +5,8 @@ cff-version: 1.2.0
 message: "If you use ampere in your research, please cite the software as below (and the paper, once there is one)."
 type: software
 title: "ampere"
-version: "1.0.0b1"
-date-released: "2026-10-05"
+version: "1.0.0b2"
+date-released: "2026-10-15"
 doi: "10.5281/zenodo.23151412"
 license: "GPL-3.0-or-later"
 repository-code: "https://github.com/ICSM/ampere"

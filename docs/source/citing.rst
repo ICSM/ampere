@@ -10,12 +10,12 @@ citation is built into the package, so it always names the version you have:
     >>> ampere.cite()                  # a reference for your bibliography
     >>> ampere.cite(format="bibtex")   # a biblatex @software entry
 
-For the ``1.0.0b1`` beta it prints:
+For the ``1.0.0b2`` beta it prints:
 
 .. code-block:: text
 
     Scicluna, P., Kemper, F., Srinivasan, S., Marshall, J., Morata, O., Trejo, A.,
-    Zeegers, S., Fanciullo, L., Dharmawardena, T. (2026). ampere (version 1.0.0b1)
+    Zeegers, S., Fanciullo, L., Dharmawardena, T. (2026). ampere (version 1.0.0b2)
     [software]. https://github.com/ICSM/ampere
     Documentation: https://ampere.readthedocs.io/
     Install: pip install ampere-astro
@@ -27,7 +27,8 @@ that always resolves to the latest one. :func:`ampere.cite` prints the
 concept DOI, ``10.5281/zenodo.23151412``, and the README carries it as a
 badge. Cite the concept DOI unless you need to pin the exact version you
 used, in which case the version's own DOI is on the Zenodo record (the
-``1.0.0b1`` release is ``10.5281/zenodo.23151413``).
+``1.0.0b1`` release is ``10.5281/zenodo.23151413``, the ``1.0.0b2`` release
+``10.5281/zenodo.23384271``).
 
 **The paper.** There is no ampere paper yet. When there is one, :func:`ampere.cite`
 will ask you to cite it too and print its reference.

@@ -63,14 +63,14 @@ class TestCitationFile:
         # Zenodo minted it at the first GitHub release (2026-10-05); the concept
         # DOI, which always resolves to the latest version, is the one cited.
         assert 'doi: "10.5281/zenodo.23151412"\n' in text
-        assert 'date-released: "2026-10-05"\n' in text
+        assert 'date-released: "2026-10-15"\n' in text
 
 
 class TestCite:
     def test_text_names_the_version_the_repository_and_the_doi(self) -> None:
         text = _printed()
         assert text.startswith("Scicluna, P., Kemper, F., Srinivasan, S.")
-        assert "(2026). ampere (version 1.0.0b1) [software]" in text
+        assert "(2026). ampere (version 1.0.0b2) [software]" in text
         assert "https://github.com/ICSM/ampere" in text
         assert "pip install ampere-astro" in text
         assert "DOI: https://doi.org/10.5281/zenodo.23151412" in text
@@ -81,8 +81,8 @@ class TestCite:
         assert entry.startswith("@software{ampere,\n")
         assert entry.rstrip().endswith("}")
         assert "author = {Scicluna, Peter and Kemper, Francisca and" in entry
-        assert "version = {1.0.0b1}" in entry
-        assert "date = {2026-10-05}" in entry
+        assert "version = {1.0.0b2}" in entry
+        assert "date = {2026-10-15}" in entry
         assert "doi = {10.5281/zenodo.23151412}" in entry
 
     def test_it_prints_to_standard_output_by_default(

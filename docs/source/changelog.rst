@@ -7,7 +7,7 @@ can do with each release, not which pull requests made it.
 1.0.0b2 — the second beta
 -------------------------
 
-*Released from the* ``v1.0.0b2`` *tag on DATE.*
+*Released from the* ``v1.0.0b2`` *tag on 2026-10-15.*
 
 What this release is
 ~~~~~~~~~~~~~~~~~~~~

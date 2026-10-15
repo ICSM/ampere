@@ -59,9 +59,10 @@ CITATION: Citation = {
         "If you use ampere in your research, please cite the software as below "
         "(and the paper, once there is one)."
     ),
-    "version": "1.0.0b1",
-    "date_released": "2026-10-05",
-    # The concept DOI; the v1.0.0b1 release itself is 10.5281/zenodo.23151413.
+    "version": "1.0.0b2",
+    "date_released": "2026-10-15",
+    # The concept DOI; the v1.0.0b1 release itself is 10.5281/zenodo.23151413 and
+    # the v1.0.0b2 release 10.5281/zenodo.23384271.
     "doi": "10.5281/zenodo.23151412",
     "license": "GPL-3.0-or-later",
     "repository_code": "https://github.com/ICSM/ampere",
