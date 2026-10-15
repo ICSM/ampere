@@ -27,7 +27,7 @@ on the jax backend takes a value *and* a gradient of a 20 000-point GP
 likelihood in **4.7 ms**. The whole study is
 `docs/source/m2_misspecification.rst`, and it is re-run by `pixi run test-m2`.
 
-Ampere is in **beta** (`1.0.0b1`), the first release of its v2 redesign. It is a
+Ampere is in **beta** (`1.0.0b2`), the second beta of its v2 redesign. It is a
 backend-neutral core of frozen contracts, three backends that implement it
 (pure numpy/scipy, torch and jax), and nine inference engines written once
 against the contracts and run on any of them. One of them is for models with no

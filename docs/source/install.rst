@@ -34,7 +34,7 @@ brackets:
     $ pip install "ampere-astro[jax]"
     $ pip install "ampere-astro[all]"
 
-The ``1.0.0b1`` beta is a pre-release: ``pip install ampere-astro`` installs
+The ``1.0.0b2`` beta is a pre-release: ``pip install ampere-astro`` installs
 it while there is no final release, and ``pip install --pre ampere-astro``
 picks up later betas once a final release exists.
 
