@@ -4445,8 +4445,9 @@ name with a local cache directory (no new dependency unless the item finds one n
 snapshot of the filters the tests and examples use vendored under
 `tests/data` with provenance, replacing the 45 MB `ampere_allfilters.hd5`
 bundled in the wheel (#64: "generate the library rather than download
-it") — the bundle stays one release as a fallback behind a loud warning
-naming the fix, then goes (a D-question below); `SyntheticPhotometry.from_library`
+it") — the bundle stays as a fallback behind a loud warning naming the fix
+through the betas and goes at `1.0.0` or the first release candidate (D11,
+ruled 2026-10-15); `SyntheticPhotometry.from_library`
 reads the new library, `pyphot` becomes optional (its compat layer
 retired when the bundle goes). (2) `read_photometry`: a user's table of
 fluxes, uncertainties and filter names (astropy `Table`, CSV, VOTable —
@@ -4558,14 +4559,14 @@ dev.
 (`cassis_yaaar_*.fits`: wavelength, flux, error and the flag columns per
 order into `Spectrum` with the flags as mask, the module order stitched
 or selectable by name, the header's AOR key in `meta`), by W7.3's
-pattern; the fixture is the file PR #82 supplies, vendored under
-`tests/data` with its provenance row (IRSA/CASSIS, the pinned URL, the
-SHA-256, the redistribution basis — public archive products) if D10 rules
-so, else downloaded and cached; the star-disc twin (`examples/star_disc`)
+pattern; the fixture is the file PR #82 supplies, moved (or copied) from
+`examples/star_disc/` once that PR has merged to `tests/data` with its
+provenance row (IRSA/CASSIS, the pinned URL, the SHA-256, the
+redistribution basis — public archive products) — D10, ruled 2026-10-15; the star-disc twin (`examples/star_disc`)
 reads it so its IRS arm fits the real spectrum the legacy script reads
 (the W6.13 C1 gap closed), `star_disc.py`'s docstring paragraph
-corrected. **Depends:** D10. **Accept:** the reader's rows (the vendored
-file, the download route offline-skipped, the refusals); the twin's IRS
+corrected. **Depends:** PR #82 merged (D10). **Accept:** the reader's rows (the
+vendored file, the download route offline-skipped, the refusals); the twin's IRS
 arm green with its numbers pinned; `photometry_spectra.rst`'s reader
 section; gates dev.
 
@@ -4742,6 +4743,17 @@ reasoning is the horizon memo's §11 and the user-journeys memo's §5–§6.
   reproducibility claim; if not, they stay Phase 9–10 fillers.
   **Recommended: decide at Phase 9's drafting; W8.8's gallery lands
   either way.**
+  **Ruled 2026-10-15: no software paper for a monolithic release. Peter's plan is papers that are primarily new scientific results and depend on particular components — the warped GPs, the population models — mainly on Nearby Evolved Stars Survey data; a Phase 9 consideration, with no effect on W8.8.**
+  **Ruled 2026-10-15: the bundle stays as a fallback through the betas and is removed at `1.0.0`, or at the first release candidate if there is one — not at `1.0.0b3`.**
+  **Ruled 2026-10-15: wait for PR #82 to merge as it is; W8.10 then moves or copies the file to `tests/data` with its provenance row.**
+  **Ruled 2026-10-15: as recommended.**
+  **Ruled 2026-10-15: all five, `harmonic` behind the extra.**
+  **Ruled 2026-10-15: the item.**
+  **Ruled 2026-10-15: `1.0.0b3`; the final's criteria at Phase 9's drafting.**
+  **Ruled 2026-10-15: the front doors; no new namespace.**
+  **Ruled 2026-10-15: IRS first, then the memo's order; W8.12 timed to W8.2.**
+  **Ruled 2026-10-15: as drafted.**
+  **Ruled 2026-10-15: both, W8.0 first.**
 
 ## Status
 
