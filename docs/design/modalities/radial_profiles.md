@@ -358,3 +358,168 @@ on this item's parameters.
 # Third block: the trapezoid Hankel transform of a 2-D Gaussian (sigma 0.5", 2 000 r points)
 # against exp(-2 pi^2 sigma^2 rho^2) at 0-300 k-lambda: max |error| 7.7e-7.
 ```
+
+## 8. A scenario, walked through (Peter, 2026-10-15): one spherical source, four data sets, an external radiative-transfer code, SBI
+
+*Peter's answers to §7 recorded first: (1) U Ant is the example, its data
+releasable where not already public, with a synthetic twin beside it; (2) the
+ACA table form is open; (3) all three density laws — single and broken power
+law, Gaussian in r — and a Gaussian ring; (4) `LatentProfile`'s role still to
+be made clear (§8.4 below); (5) covariance tables will serve SEDs and others
+too, so `FixedCovarianceNoise` is its own item landing before W8.2.*
+
+**The data.** (a) VLTI/MATISSE at 10 µm: squared visibilities against uv
+distance, no PSF (the visibilities *are* the measurement). (b) SCUBA-2 at
+850 µm: a radial profile from a map with a 13″ beam, or the map itself.
+(c) CO(3–2): flux against radius *and* velocity — from the JCMT a cube with
+a beam and a spectral response, from the ACA visibilities against uv
+distance and velocity. (d) An SED of photometric points. **The model**: an
+external radiative-transfer code producing images (per wavelength and, for
+the line, per velocity channel) and radial profiles; the source spherical,
+so no deprojection; each profile observed through its own PSF.
+
+### 8.1 The model: one `Model` subclass around the code
+
+Exactly as `examples/cstar`'s `CarbonStarShell(Model)` wraps Hyperion
+today: `evaluate(**values)` runs the code at θ and returns a `ModelResult`
+with named channels. For this scenario the channels are a `Spectrum`
+(`"sed"`, the model SED on the code's wavelength grid), a `RadialProfile`
+per continuum band (`"profile_10um"`, `"profile_850um"` — the code's own
+`I(r)`; a 1-D RT code produces it directly, a 3-D one is azimuthally
+averaged inside `evaluate` since the source is spherical), and for the line
+a `RadialProfile` **with a spectral axis** (`"co32"`, values on `(r, v)`),
+or a `Cube` if the code only emits channel maps. The code runs at rung 0:
+no gradients, `ProcessExecutor` for a pool, `SimulatorFailed` for a crash
+(the cstar pattern), the per-θ cost whatever the code costs. Requirements
+negotiation tells the model which `r` grids, wavelengths and velocities
+each chain needs; a code with a fixed output grid returns that grid and
+the chain's first step interpolates (`Render` and `Bin` do; `Resample` does
+for spectra).
+
+### 8.2 The four datasets and their chains
+
+| Dataset | Observed container | Chain (model → observed) | Likelihood (for simulation) |
+|---|---|---|---|
+| MATISSE V² | `VisibilitySet` from `read_oifits`, 10 µm channel(s) | `HankelTransform()` on `"profile_10um"` → `SquaredAmplitude()` | Gaussian, independent |
+| SCUBA-2 profile | `RadialProfile` from `AzimuthalAverage(edges).apply(map)` with `Σ_P = step.covariance(variance_map, beam)` | `BeamConvolution(13″)` → `Bin(edges)` on `"profile_850um"` | Gaussian, `FixedCovarianceNoise(Σ_P)` |
+| SCUBA-2 map (the alternative) | `Image` | `Render(x, y)` → `PSFConvolution(13″)` | Gaussian, independent (the variance map) |
+| CO(3–2), JCMT | `RadialProfile` with spectral axis, one profile per channel, each with its covariance | `BeamConvolution(14″)` per channel → `SpectralResponse(Δv)` → `Bin` | Gaussian, fixed covariance per channel |
+| CO(3–2), ACA | `VisibilitySet` with a spectral axis (W4.1), `V(ρ, v)` | `HankelTransform()` per channel on `"co32"` | complex Gaussian, independent |
+| SED | `PhotometricPoints` through `read_photometry` (W8.5) | `SyntheticPhotometry(filters)` on `"sed"` | Gaussian, independent (or a covariance table) |
+
+The four `Dataset`s go into one `FittingProblem`; the model's parameters
+are shared by name across all of them, which is the whole point of the
+joint fit — the 10 µm visibilities constrain the inner radius and the
+warm dust, the 850 µm profile the outer envelope and the mass, the CO the
+kinematics and the gas mass, the SED the luminosity and the total optical
+depth.
+
+### 8.3 SBI on it
+
+`SBIEngine(problem, method="npe", embedding="set", ...)`: `simulate_many`
+draws θ from the prior, runs the code once per draw (the training budget
+is the code's cost times the number of simulations — thousands for a
+cheap code, hundreds plus the amortised cache and the cluster for an
+expensive one; the artefact store keeps every simulation across sessions),
+pushes each `ModelResult` through the four chains, **draws noise through
+each dataset's likelihood** (`IndependentNoise.sample`,
+`FixedCovarianceNoise.sample` — this is how the SCUBA-2 covariance enters
+SBI: the simulated profiles carry the beam's correlation, so the network
+learns it) and trains a posterior conditioned on the encoding of all four
+observed containers at once. The coordinate–value–mask encoding with the
+axis-identity codes (W5.11) is what lets one network read a visibility's
+`ρ`, a profile's `r`, a cube's `v` and a filter's pivot without confusing
+them. `ContextPrior` amortises over the noise levels if the same network
+is to serve several sources (the NESS sample), which is the Phase 9
+population story. `calibration.sbc` checks the trained posterior on
+held-out simulations — the only correctness check SBI has, and the one
+the engine ships.
+
+### 8.4 What `LatentProfile` is, in plain words
+
+The flexible GP likelihood says: "the data are the model plus a smooth
+unknown deviation, and I will marginalise over that deviation rather than
+pretend it is zero." It lives on the *observed* side, in the data's own
+coordinates. `LatentProfile` is the same sentence said about the *model's*
+brightness profile: "the source's `I(r)` is my parametric law plus a smooth
+unknown deviation in `r`." Technically it is a set of extra parameters —
+the deviation's values at knots in `log r`, declared non-centred (standard-
+normal variables times the Cholesky factor of a kernel) with an amplitude
+and a length scale — so the sampler or the simulator draws smooth
+deviations, and the posterior on them is the "where does my RT model fail,
+in radius" result.
+
+Two consequences for this scenario. First, **under SBI there is no
+likelihood for the GP to live in**: NPE learns the posterior from
+simulations and never evaluates `S = K(θ) + diag σ²`. The misspecification
+robustness that makes ampere ampere is therefore absent from a pure
+black-box SBI fit *unless the deviation is part of the simulator* — and
+`LatentProfile` is exactly that: add it to the model's profile channels,
+put its amplitude and length scale in the prior, and every simulated data
+set carries a smooth deviation, so the trained posterior is robust to the
+RT code being slightly wrong in the way the GP likelihood is robust on the
+native path. That is the misspecification-aware simulator, and it is why
+`LatentProfile` belongs in W8.2's first cut rather than a follow-on.
+Second, used *alone* (no parametric law) it is frank's non-parametric
+profile, for the disc user who wants `I(r)` without a model.
+
+### 8.5 What would not work today, and what fixes each
+
+1. **No `RadialProfile`, `Render`, `HankelTransform`, `BeamConvolution`,
+   `Bin`, `AzimuthalAverage`** — W8.2. Today the scenario's RT model would
+   have to emit `Image`s for every band, be `FourierSample`d for MATISSE,
+   `PSFConvolution`ed for SCUBA-2, and be fitted on the full maps; the
+   profile form is unavailable.
+2. **No covariance on an observed container** — `FixedCovarianceNoise`,
+   its own S item before W8.2 (Peter's (5)); without it the SCUBA-2 and CO
+   profiles are fitted with per-bin errors five times too small (§4).
+3. **A profile against radius *and* velocity has no kind.** Two routes:
+   `RadialProfile` gains an optional spectral axis exactly as `VisibilitySet`
+   did at W4.1 (recommended — one kind, the CO case is the first customer,
+   `BeamConvolution` and `Bin` act per channel), or the cube is kept as a
+   `Cube` and averaged per channel into many one-axis profiles (clumsy for
+   the network and for plotting). A decision for the item.
+4. **`PSFConvolution` accepts `Image` only, and no step convolves a `Cube`
+   spectrally.** For the JCMT cube fitted as a cube rather than a profile:
+   `PSFConvolution` widened to `Cube` (per channel) and a `SpectralResponse`
+   step on the cube's velocity axis — two small transformation additions,
+   in W8.2 if the CO case is in scope, else recorded.
+5. **No per-channel beam for the ACA line data** — none needed: visibilities
+   carry no PSF; the primary beam is a multiplicative taper on the rendered
+   model, optional.
+6. **Misspecification under SBI** — §8.4: only through `LatentProfile` (or a
+   deviation term in the simulator); the SBI page must say so, which it
+   does not today (a docs line for W8.2 or W8.13).
+7. **Gradients**: none, by construction. NUTS and VI refuse. The route to
+   them is the emulator (W8.3/W8.4): train `EmulatedModel` on the same
+   simulations, then fit natively with the GP likelihood *and* the error
+   component — the §8.4 problem solved the other way round. The two routes
+   on one source, compared, is W8.14's figure.
+8. **Cost**: an RT code at minutes per model and four chains is a training
+   set of hours to days; the artefact store and the cluster scripts exist
+   for it, `ContextPrior` makes one training set serve the NESS sample, and
+   nothing in the scenario changes the engine.
+
+### 8.6 The overall problem, as a declaration
+
+```python
+model = NessRTModel(code=..., params=...)                       # rung 0; channels "sed", "profile_10um", "profile_850um", "co32"
+model = model.with_latent(LatentProfile(knots, kernel=Matern32(...)), on=("profile_10um", "profile_850um"))  # the deviation in the simulator
+
+datasets = {
+  "matisse": Dataset(read_oifits("uant_matisse.fits")["vis2"], model, [HankelTransform(), SquaredAmplitude()],
+                     Likelihood(GaussianFamily(), IndependentNoise()), channel="profile_10um"),
+  "scuba2":  Dataset(profile_850, model, [BeamConvolution(13 * u.arcsec), Bin(edges)],
+                     Likelihood(GaussianFamily(), FixedCovarianceNoise(sigma_850)), channel="profile_850um"),
+  "co32":    Dataset(co_profiles, model, [BeamConvolution(14 * u.arcsec), SpectralResponse(0.4 * u.km / u.s), Bin(edges)],
+                     Likelihood(GaussianFamily(), FixedCovarianceNoise(sigma_co)), channel="co32"),
+  "sed":     Dataset(read_photometry("uant_sed.vot"), model, [SyntheticPhotometry.from_observed(...)],
+                     Likelihood(GaussianFamily(), IndependentNoise()), channel="sed"),
+}
+problem = FittingProblem(model, datasets, priors=...)
+run = SBIEngine(problem, method="npe", embedding="set", executor=ProcessExecutor(8), cache=store).run(simulations=4000)
+```
+(`with_latent` is a sketch for "add the deviation to these channels"; the
+item fixes the spelling.) The same `problem` with `EmulatedModel` in place
+of the code and `GaussianProcessNoise` beside the fixed covariances is the
+native-path twin.
