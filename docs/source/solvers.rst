@@ -43,6 +43,19 @@ quasiseparable and is refused by name rather than silently costing more:
     >>> noise.solver.REQUIRES_QUASISEPARABLE
     True
 
+On the **jax** backend :class:`ampere.backends.jax.QuasisepGP` runs the same
+recursions through one of two *providers*: celerite2's compiled kernels, which
+lower on the CPU alone and cannot be batched, or a ``lax.scan`` written in jax
+itself, which runs on any device and under ``vmap``. ``provider="auto"`` (the
+default) chooses by the device you ask for — celerite2 on the CPU, where it is
+six to nine times faster, and the scan anywhere else — so
+``QuasisepGP(device="cuda")`` fits where ``1.0.0b1`` refused; ``"celerite2"``
+or ``"scan"`` forces one, and the run's provenance records which computed the
+numbers (``library`` and ``provider`` in the solver's configuration). The two
+agree to rounding; the measurement is ``docs/design/performance_memo.md`` §9.
+The **torch** ``QuasisepGP`` remains CPU-only; :class:`~ampere.core.DenseGP`
+and :class:`~ampere.core.HilbertSpaceGP` serve an accelerator on both.
+
 Both are implemented on all three backends, and both are checked
 bit-tightly against each other in the conformance battery (the
 ``cross_solver`` tolerance, ``1e-6`` by default) rather than against a
