@@ -4,15 +4,40 @@ Changelog
 This page is maintained by hand, one section per release. It says what you
 can do with each release, not which pull requests made it.
 
-Unreleased
-----------
+1.0.0b2 — the second beta
+-------------------------
 
-* **Read OIFITS files.** :func:`ampere.interferometry.read_oifits` turns an
-  OIFITS file's squared visibilities, closure phases and complex visibilities
-  into the interferometric containers, ready for a fit, and the new
-  :mod:`ampere.interferometry` is the one place to import interferometry
-  from; :class:`~ampere.backends.reference.SquaredAmplitude` fits squared
-  visibilities as they were measured. See :doc:`interferometry` §10.
+*Released from the* ``v1.0.0b2`` *tag on DATE.*
+
+What this release is
+~~~~~~~~~~~~~~~~~~~~
+
+The second beta of the same v2 line: everything the ``1.0.0b1`` section below
+describes still holds, except where a bullet here says otherwise, and nothing
+has been removed. It adds what the first beta listed as planned and what
+using it showed was missing, in five themes: derived parameters and
+populations over a dataset's own nuisance parameters, measured on the
+misspecification study's pattern; two file readers (OIFITS and JWST spectra)
+and emission-line fluxes as an observable; the jax quasiseparable solver on an
+accelerator, a bound-aware scipy optimiser, and ensemble engines that start
+from the optimiser's mode and say when a run has not converged; a
+blackbody's ``scale`` as a flux in Jy (a **behaviour change** for a fit
+written against the old one) and one model written once for three backends;
+and pages on reading the diagnostics, a spectroscopist's walkthrough and
+accessibility. It lifts three of the first beta's known limitations — the two
+design items planned for after it (``Derived`` and the per-dataset
+population), the absence of any file reader, and the jax quasiseparable
+solver's restriction to the CPU; the list at the end of this section says
+what stands.
+
+Installing it is unchanged: ``pip install ampere-astro`` installs the newest
+beta while there is no final release (``pip install --pre ampere-astro`` once
+there is), with the same extras as before — ``pip install
+"ampere-astro[jax]"`` and so on. Python 3.12 to 3.14. See :doc:`install`.
+
+Hierarchy and derived parameters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 * **Derived parameters.** ``Parameter(name, Derived("mu + sigma * z"))``
   declares a parameter computed from others — no sampler dimension, no prior
   term, handed to the model like any other value and stored in the
@@ -24,24 +49,86 @@ Unreleased
   ``tail="slab"``. A population member must now be declared by every
   component it is routed to; one that is not is refused when the problem is
   composed, rather than failing at the first model evaluation.
+* **A population over each dataset's own nuisance parameters.** A
+  :class:`~ampere.core.Population`'s ``over`` entries may now be a path
+  inside a dataset — ``"d0.likelihood"`` for the flexible likelihood's GP
+  amplitude, ``"d0.instrument.calibrate"`` for one calibration step — so a
+  per-dataset nuisance is drawn from one shared prior with a fitted spread,
+  and ``DatasetCollection.plate(..., within="likelihood")`` writes those
+  entries from the dataset labels. An emitted run's plate dimension is
+  labelled by the dataset labels, and the declaration is recorded in the
+  run's provenance as ``ampere_populations`` (provenance schema 12). A
+  dataset named in ``over`` without a path is still refused, now with this
+  form as the remedy. See :doc:`population`.
+* **Tie, independent or population, measured.** ``examples/m2_populations``
+  runs milestone M2's pattern over eight spectra — the sharp line injected in
+  three, one clean member at five times the noise — with the GP amplitudes
+  declared independent, tied, or as the non-centred population over
+  ``d*.likelihood``, and ``tests/m2/test_populations.py`` pins what it
+  finds: the population keeps the deviated spectra honest and localised,
+  recovers the amplitudes' spread, narrows the poorly constrained member's
+  amplitude without shrinking the deviated ones, and is calibrated under
+  SBC. :doc:`population` says which declaration to use when, with the
+  measured table.
 
-* **Install from PyPI throughout the documentation.** The overview, the SBI
-  guide and the torch and jax backend pages say ``pip install
-  ampere-astro[...]`` rather than an install from a clone; the development
-  install stays on :doc:`install`.
-* **Training sets keep long failure messages and extra-coordinate dtypes.**
-  Appending a batch whose failure message (or context record) is longer than
-  any in the file no longer truncates it on write: every string variable of a
-  training set is stored variable-length. Integer and boolean extra
-  coordinates are covered by a test through write, append and read-back.
-* **Migrating note: the legacy star scripts are** :math:`4\pi` **too faint.**
-  :doc:`migrating` now says that the legacy ``phoenixstar.py`` and
-  ``star_disc.py``/``QuickSED`` divide by :math:`4\pi d^2` twice; the twins
-  use the correct law.
-* **For developers.** A ``heavy`` pytest marker keeps the optimiser rows that
-  need a 40-second emcee run out of ``pixi run test-fast``; ``test-all`` and CI
-  still run them. ``SyntheticPhotometry.from_library`` no longer depends on a
-  legacy module.
+Readers and observables
+~~~~~~~~~~~~~~~~~~~~~~~
+
+* **Read OIFITS files.** :func:`ampere.interferometry.read_oifits` turns an
+  OIFITS file's squared visibilities, closure phases and complex visibilities
+  into the interferometric containers, ready for a fit, and the new
+  :mod:`ampere.interferometry` is the one place to import interferometry
+  from; :class:`~ampere.backends.reference.SquaredAmplitude` fits squared
+  visibilities as they were measured. See :doc:`interferometry` §10.
+* **Read JWST spectra.** :func:`ampere.spectroscopy.read_jwst` turns a JWST
+  pipeline ``x1d`` or ``c1d`` product into a :class:`~ampere.core.Spectrum` —
+  the axis in micron, the flux in the file's own unit, the pipeline's
+  ``DO_NOT_USE`` bit as the mask, the instrument, exposure and pipeline
+  version in ``meta`` — and refuses a file holding several spectra unless
+  ``source=`` or ``extension=`` says which. The new :mod:`ampere.spectroscopy`
+  is the one place to import spectra, photometry and their instrument steps
+  from. See :ref:`photometry-spectra-jwst`.
+* **Fit a table of emission-line fluxes.** :class:`~ampere.core.LineFluxes`
+  holds one integrated flux per transition (a label, a rest wavelength, a
+  flux in W m⁻² — a table in erg s⁻¹ cm⁻² converts with ``.to_unit``), and
+  ``LineIntegration`` (reference, torch and jax) integrates a model spectrum
+  in Jy over a window around each line, in km/s or µm, optionally subtracting
+  a linear continuum through the window's edges, so a model is compared with
+  a line list rather than a spectrum. An observed table aligns with the
+  chain's lines by transition label in any order, as photometry aligns by
+  filter name, and the flexible likelihood's kernel runs over rest
+  wavelength, where a misspecified excitation ladder shows as a correlated
+  residual. See :doc:`line_fluxes`.
+* **Interferometry housekeeping (W7.4).** (1)
+  ``SquaredAmplitude(normalisation="model")`` divides each ``|V|**2`` by the
+  model's own zero-spacing value, for a model whose total flux is free; it
+  asks the Fourier step for each sample's ``(0, 0)`` twin (twice the DFT's
+  samples), on all three backends, refuses by name on the analytic route, and
+  leaves the buffer form the default. (2)
+  ``FourierSample.from_observed`` emits the observed container's own spectral
+  unit, so a container in nanometres no longer fails alignment at composition.
+  (3) The conformance protocol's ``InterferometryPieces`` gains
+  ``squared_amplitude`` and the native-piece check reads its names from the
+  protocol. (4) A conformance row fits the shipped ``Binary`` to the 2008
+  contest file and recovers the published geometry; Appendix D's odd optimum
+  was ``position_angle`` entered in degrees where the model takes radians, and
+  :doc:`interferometry` now says so beside the DFT sign.
+
+Solvers and inference
+~~~~~~~~~~~~~~~~~~~~~
+
+* **The jax quasiseparable solver runs on an accelerator.**
+  :class:`ampere.backends.jax.QuasisepGP` gains ``provider=`` — ``"auto"``
+  (the default), ``"celerite2"`` or ``"scan"`` — and a second implementation
+  of its O(N) recursions, written in jax itself as ``lax.scan``, which runs on
+  any device and, unlike celerite2's compiled kernels, can be batched with
+  ``vmap`` (``QuasisepGP(provider="scan").BATCHABLE`` is true, so
+  ``log_prob_unconstrained_batched`` works on a quasiseparable problem). The
+  default chooses by the device you ask for: celerite2 on the CPU, where it is
+  six to nine times faster, and the scan anywhere else, so
+  ``QuasisepGP(device="cuda")`` now fits instead of refusing. The run's
+  provenance records which one computed the numbers (``library`` and
+  ``provider`` in the solver's configuration); the answers agree to rounding.
 * **The scipy optimiser no longer stops at a corner of the prior box.**
   ``optimise(method="scipy")`` now moves a parameter with a box or half-line
   prior in its own normalised value, kept inside the box, rather than
@@ -58,48 +145,15 @@ Unreleased
   not converged.** ``run()`` with no ``initial=`` now runs
   ``optimise(problem, method="scipy", starts=1)`` and starts the walkers
   in a ball at its mode; ``initial="prior"`` restores the former prior
-  start exactly. An optimum on a prior bound, or no start the optimiser can
-  score, falls back to the prior with a
-  :class:`~ampere.inference.DefaultStartWarning`. The run records
-  ``ampere_start_kind`` (provenance schema 11).
+  start exactly. A problem the optimiser cannot start at all falls back to
+  the prior with a :class:`~ampere.inference.DefaultStartWarning` (an
+  optimum on a prior bound did too, until the mixed start two bullets
+  below). The run records ``ampere_start_kind`` (provenance schema 11).
   :func:`ampere.results.check_convergence` gives a verdict on R-hat and
   bulk ESS with a remedy in words, and ``emit`` and
   :func:`~ampere.results.summary` warn with it when a chain-based run
   fails; VI and SBI runs are never warned. An ensemble given sixteen or
   more free parameters warns once, naming NUTS. See :doc:`faqs`.
-* **Reading the diagnostics.** A new page, :doc:`reading_the_diagnostics`,
-  says what the residual, GP-localisation, posterior-predictive and
-  anomaly-score plots show and what they do not, opening with a power law
-  fitted to an IRS spectrum (the GP carrying the silicate emission), and
-  closing with how to choose a kernel's priors against the model's own
-  scales. Its figures are the first to be built with the documentation, by
-  matplotlib's plot directive from ``docs/source/plots/``, at a reduced
-  budget.
-* **The star-disc twin fits HD 105's two upper limits.** The CSV's SPIRE
-  500 micron and LABOCA 870 micron non-detections, which the legacy never
-  used, are declared with ``Censoring.upper_limits`` on the twin's
-  photometry (twenty-one points, ``build_problem(limits=True)`` by default;
-  ``limits=False`` is the nineteen of before). :doc:`photometry_spectra`
-  gains the worked censoring example.
-* **Writing a model once for three backends.** :class:`ampere.core.ArrayOps`
-  is widened from a kernel's namespace to a model's (``asarray``,
-  ``asindex``, ``to_numpy``, ``where``, ``interp``, ``cumsum``,
-  ``trapezoid``, ``power``, ``clip``, ``log10``, ``sum``), with
-  :class:`~ampere.backends.jax.JaxOps` and
-  :class:`~ampere.backends.torch.TorchOps` now public.
-  :class:`ampere.core.PortableModel` is a base whose one method ``_flux`` is
-  written against it; ``ampere.backends.jax.PortableModel`` and
-  ``ampere.backends.torch.PortableModel`` make a native twin one line. The
-  new guide :doc:`notebooks/portable_model` rewrites the quickstart's model
-  on it and fits it with emcee on numpy and NUTS on jax.
-
-* **An accessibility statement for the documentation.** The new page
-  :doc:`accessibility` records what was checked (WCAG 2.1 AA contrast,
-  keyboard order, figure alt text), what fails and how to report a problem.
-  The footer and several syntax colours were darkened to pass, the page
-  language is declared, and a figure without ``:alt:`` text in a
-  reStructuredText page is now a build warning.
-
 * **A bound-pinned mode starts mixed, and the verdict's R-hat threshold is
   1.1.** A half-normal GP amplitude's mode sits on its floor at zero whenever
   the model fits, so every flexible-likelihood fit of a good model used to warn
@@ -114,13 +168,8 @@ Unreleased
   from ``emit`` and ``summary``, is 1.1, the ensemble convention (1.05 was
   stricter than a well-run ensemble reaches at a modest budget).
 
-* **A spectroscopist's walkthrough on a real spectrum.** The
-  :doc:`NGC 6302 notebook <notebooks/ngc6302>` expands the Kemper et al. twin
-  into a tutorial that reads the *ISO* data by hand, declares the two-shell
-  dust model species by species, fits it with independent noise and with a GP
-  from the published solution, reads the convergence verdict and every
-  diagnostic of :doc:`reading_the_diagnostics`, and ends on the dust-mass table
-  and the second posterior mode the twin's record found.
+Models and conventions
+~~~~~~~~~~~~~~~~~~~~~~
 
 * **Behaviour change: a blackbody's ``scale`` is a flux in Jy, and a
   catalogue's own wavelengths are accepted.** On
@@ -146,75 +195,105 @@ Unreleased
   gives the model curve at a point in one call; the localisation plot's
   caveat no longer overdraws the axis label, and a corner plot no longer
   logs "too few points to create valid contours".
+* **Writing a model once for three backends.** :class:`ampere.core.ArrayOps`
+  is widened from a kernel's namespace to a model's (``asarray``,
+  ``asindex``, ``to_numpy``, ``where``, ``interp``, ``cumsum``,
+  ``trapezoid``, ``power``, ``clip``, ``log10``, ``sum``), with
+  :class:`~ampere.backends.jax.JaxOps` and
+  :class:`~ampere.backends.torch.TorchOps` now public.
+  :class:`ampere.core.PortableModel` is a base whose one method ``_flux`` is
+  written against it; ``ampere.backends.jax.PortableModel`` and
+  ``ampere.backends.torch.PortableModel`` make a native twin one line. The
+  new guide :doc:`notebooks/portable_model` rewrites the quickstart's model
+  on it and fits it with emcee on numpy and NUTS on jax.
+* **The star-disc twin fits HD 105's two upper limits.** The CSV's SPIRE
+  500 micron and LABOCA 870 micron non-detections, which the legacy never
+  used, are declared with ``Censoring.upper_limits`` on the twin's
+  photometry (twenty-one points, ``build_problem(limits=True)`` by default;
+  ``limits=False`` is the nineteen of before). :doc:`photometry_spectra`
+  gains the worked censoring example.
 
-* **Interferometry housekeeping (W7.4).** (1)
-  ``SquaredAmplitude(normalisation="model")`` divides each ``|V|**2`` by the
-  model's own zero-spacing value, for a model whose total flux is free; it
-  asks the Fourier step for each sample's ``(0, 0)`` twin (twice the DFT's
-  samples), on all three backends, refuses by name on the analytic route, and
-  leaves the buffer form the default. (2)
-  ``FourierSample.from_observed`` emits the observed container's own spectral
-  unit, so a container in nanometres no longer fails alignment at composition.
-  (3) The conformance protocol's ``InterferometryPieces`` gains
-  ``squared_amplitude`` and the native-piece check reads its names from the
-  protocol. (4) A conformance row fits the shipped ``Binary`` to the 2008
-  contest file and recovers the published geometry; Appendix D's odd optimum
-  was ``position_angle`` entered in degrees where the model takes radians, and
-  :doc:`interferometry` now says so beside the DFT sign.
+Documentation
+~~~~~~~~~~~~~
 
-* **A population over each dataset's own nuisance parameters.** A
-  :class:`~ampere.core.Population`'s ``over`` entries may now be a path
-  inside a dataset — ``"d0.likelihood"`` for the flexible likelihood's GP
-  amplitude, ``"d0.instrument.calibrate"`` for one calibration step — so a
-  per-dataset nuisance is drawn from one shared prior with a fitted spread,
-  and ``DatasetCollection.plate(..., within="likelihood")`` writes those
-  entries from the dataset labels. An emitted run's plate dimension is
-  labelled by the dataset labels, and the declaration is recorded in the
-  run's provenance as ``ampere_populations`` (provenance schema 12). A
-  dataset named in ``over`` without a path is still refused, now with this
-  form as the remedy. See :doc:`population`.
-* **Read JWST spectra.** :func:`ampere.spectroscopy.read_jwst` turns a JWST
-  pipeline ``x1d`` or ``c1d`` product into a :class:`~ampere.core.Spectrum` —
-  the axis in micron, the flux in the file's own unit, the pipeline's
-  ``DO_NOT_USE`` bit as the mask, the instrument, exposure and pipeline
-  version in ``meta`` — and refuses a file holding several spectra unless
-  ``source=`` or ``extension=`` says which. The new :mod:`ampere.spectroscopy`
-  is the one place to import spectra, photometry and their instrument steps
-  from. See :ref:`photometry-spectra-jwst`.
-* **Fit a table of emission-line fluxes.** :class:`~ampere.core.LineFluxes`
-  holds one integrated flux per transition (a label, a rest wavelength, a
-  flux in W m⁻² — a table in erg s⁻¹ cm⁻² converts with ``.to_unit``), and
-  ``LineIntegration`` (reference, torch and jax) integrates a model spectrum
-  in Jy over a window around each line, in km/s or µm, optionally subtracting
-  a linear continuum through the window's edges, so a model is compared with
-  a line list rather than a spectrum. An observed table aligns with the
-  chain's lines by transition label in any order, as photometry aligns by
-  filter name, and the flexible likelihood's kernel runs over rest
-  wavelength, where a misspecified excitation ladder shows as a correlated
-  residual. See :doc:`line_fluxes`.
-* **The jax quasiseparable solver runs on an accelerator.**
-  :class:`ampere.backends.jax.QuasisepGP` gains ``provider=`` — ``"auto"``
-  (the default), ``"celerite2"`` or ``"scan"`` — and a second implementation
-  of its O(N) recursions, written in jax itself as ``lax.scan``, which runs on
-  any device and, unlike celerite2's compiled kernels, can be batched with
-  ``vmap`` (``QuasisepGP(provider="scan").BATCHABLE`` is true, so
-  ``log_prob_unconstrained_batched`` works on a quasiseparable problem). The
-  default chooses by the device you ask for: celerite2 on the CPU, where it is
-  six to nine times faster, and the scan anywhere else, so
-  ``QuasisepGP(device="cuda")`` now fits instead of refusing. The run's
-  provenance records which one computed the numbers (``library`` and
-  ``provider`` in the solver's configuration); the answers agree to rounding.
+* **Reading the diagnostics.** A new page, :doc:`reading_the_diagnostics`,
+  says what the residual, GP-localisation, posterior-predictive and
+  anomaly-score plots show and what they do not, opening with a power law
+  fitted to an IRS spectrum (the GP carrying the silicate emission), and
+  closing with how to choose a kernel's priors against the model's own
+  scales. Its figures are the first to be built with the documentation, by
+  matplotlib's plot directive from ``docs/source/plots/``, at a reduced
+  budget.
+* **A spectroscopist's walkthrough on a real spectrum.** The
+  :doc:`NGC 6302 notebook <notebooks/ngc6302>` expands the Kemper et al. twin
+  into a tutorial that reads the *ISO* data by hand, declares the two-shell
+  dust model species by species, fits it with independent noise and with a GP
+  from the published solution, reads the convergence verdict and every
+  diagnostic of :doc:`reading_the_diagnostics`, and ends on the dust-mass table
+  and the second posterior mode the twin's record found.
+* **An accessibility statement for the documentation.** The new page
+  :doc:`accessibility` records what was checked (WCAG 2.1 AA contrast,
+  keyboard order, figure alt text), what fails and how to report a problem.
+  The footer and several syntax colours were darkened to pass, the page
+  language is declared, and a figure without ``:alt:`` text in a
+  reStructuredText page is now a build warning.
+* **Install from PyPI throughout the documentation.** The overview, the SBI
+  guide and the torch and jax backend pages say ``pip install
+  ampere-astro[...]`` rather than an install from a clone; the development
+  install stays on :doc:`install`.
+* **Migrating note: the legacy star scripts are** :math:`4\pi` **too faint.**
+  :doc:`migrating` now says that the legacy ``phoenixstar.py`` and
+  ``star_disc.py``/``QuickSED`` divide by :math:`4\pi d^2` twice; the twins
+  use the correct law.
 
-* **Tie, independent or population, measured.** ``examples/m2_populations``
-  runs milestone M2's pattern over eight spectra — the sharp line injected in
-  three, one clean member at five times the noise — with the GP amplitudes
-  declared independent, tied, or as the non-centred population over
-  ``d*.likelihood``, and ``tests/m2/test_populations.py`` pins what it
-  finds: the population keeps the deviated spectra honest and localised,
-  recovers the amplitudes' spread, narrows the poorly constrained member's
-  amplitude without shrinking the deviated ones, and is calibrated under
-  SBC. :doc:`population` says which declaration to use when, with the
-  measured table.
+For developers
+~~~~~~~~~~~~~~
+
+* **For developers.** A ``heavy`` pytest marker keeps the optimiser rows that
+  need a 40-second emcee run out of ``pixi run test-fast``; ``test-all`` and CI
+  still run them. ``SyntheticPhotometry.from_library`` no longer depends on a
+  legacy module.
+* **Training sets keep long failure messages and extra-coordinate dtypes.**
+  Appending a batch whose failure message (or context record) is longer than
+  any in the file no longer truncates it on write: every string variable of a
+  training set is stored variable-length. Integer and boolean extra
+  coordinates are covered by a test through write, append and read-back.
+
+Known limitations at 1.0.0b2
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* **No pre-fit diagnostics module.** ``ampere.diagnostics`` (RHMF screening
+  of a dataset before fitting) has not landed: the exploratory trial did not
+  meet the maturity gate set for it. Post-fit residual diagnostics are in
+  :mod:`ampere.results`. Re-checked at ``1.0.0b2``: the upstream gate is still
+  unmet.
+* **One level of hierarchy.** A population may range over model parameters
+  or over a dataset's own parameters (each spectrum's GP amplitude drawn from
+  one shared prior), and a ``Derived`` parameter makes its non-centred form
+  declarable; but a parameter still carries at most one plate, so a plate
+  within a plate (objects within surveys) cannot be declared. See
+  :doc:`population`.
+* **GPU support is exercised by smoke tests only**, run by hand on a cluster
+  at release time, never in continuous integration; the hosted CI is
+  CPU-only. Both quasiseparable solvers were CPU-only at ``1.0.0b1`` (that
+  release's note that the torch one had no such limit was wrong: it declares
+  the CPU as its device and refuses an accelerator by name). At ``1.0.0b2``
+  the jax ``QuasisepGP`` runs on an accelerator through its scan provider,
+  chosen by the device you ask for, while **the torch quasiseparable solver
+  remains CPU-only**; ``DenseGP`` and ``HilbertSpaceGP`` serve an accelerator on both
+  backends.
+* **Two file readers.** :func:`ampere.interferometry.read_oifits` for OIFITS
+  files and :func:`ampere.spectroscopy.read_jwst` for JWST ``x1d`` and ``c1d``
+  spectra; every other observation is built from arrays you read yourself.
+  Readers for catalogue photometry, generic spectra and uv tables are planned.
+* **A population fit needs a native backend in practice.** In the
+  populations measurement the reference path's emcee did not converge in
+  fifty dimensions where NUTS did, so hierarchical work is run on torch or
+  jax — ``pip install "ampere-astro[jax]"`` or ``"[torch]"`` (see
+  :doc:`population` and :doc:`install`).
+* **The jax scan provider is slower on the CPU.** It is six to nine times
+  slower than celerite2 there, so :class:`ampere.backends.jax.QuasisepGP`'s
+  default chooses it only off the CPU (see :doc:`solvers`).
 
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
