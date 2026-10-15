@@ -4743,7 +4743,7 @@ reasoning is the horizon memo's §11 and the user-journeys memo's §5–§6.
   reproducibility claim; if not, they stay Phase 9–10 fillers.
   **Recommended: decide at Phase 9's drafting; W8.8's gallery lands
   either way.**
-  **Ruled 2026-10-15: no software paper for a monolithic release. Peter's plan is papers that are primarily new scientific results and depend on particular components — the warped GPs, the population models — mainly on Nearby Evolved Stars Survey data; a Phase 9 consideration, with no effect on W8.8.**
+  **Ruled 2026-10-15: no software paper for a monolithic release is planned now (one could be considered in the future). Peter's plan is papers that are primarily new scientific results and depend on particular components — the warped GPs, the population models — mainly on Nearby Evolved Stars Survey data; a Phase 9 consideration, with no effect on W8.8.**
   **Ruled 2026-10-15: the bundle stays as a fallback through the betas and is removed at `1.0.0`, or at the first release candidate if there is one — not at `1.0.0b3`.**
   **Ruled 2026-10-15: wait for PR #82 to merge as it is; W8.10 then moves or copies the file to `tests/data` with its provenance row.**
   **Ruled 2026-10-15: as recommended.**
