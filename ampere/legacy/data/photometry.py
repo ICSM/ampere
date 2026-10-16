@@ -96,7 +96,11 @@ class Photometry(Data):
 
 
         ''' setup pyphot for this set of photometry '''
-        self.pyphotSetup(libName)
+        if isinstance(libName,str):
+            self.pyphotSetup(libName) #load library file if it's a string otherwise skip that.
+        else: 
+            self.filterLibrary = libName #assume libName is an hd5 filter library object
+        
         print(self.filterName.astype('str'))
         #newTry = [str(filt).replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
         self.filterNamesToPyphot()
@@ -114,8 +118,8 @@ class Photometry(Data):
             self.filterName = filterName[self.filterMask]
         # Create wavelength array for photometry based on pivot wavelengths of
         # filters
-        filters = self.filterLibrary.load_filters(self.filterName, interp=False)#[self.filterMask])
-        self.wavelength = np.array([filt.lpivot.to("micron").value for filt in filters])#*u.micron
+        self.filters = self.filterLibrary.load_filters(self.filterName, interp=False)#[self.filterMask])
+        self.wavelength = np.array([filt.lpivot.to("micron").value for filt in self.filters])#*u.micron
 
         #now we truncate the values and uncertainties to only include the filters that were recovered by ampere
         value = value[self.filterMask]
@@ -126,7 +130,7 @@ class Photometry(Data):
         if isinstance(value, units.Quantity) and isinstance(uncertainty, units.Quantity):
             #This is the best case. We don't need to worry about photUnits, because everything is already in the same units and we just have to convert them with astropy, then strip the units.
             if value.unit == units.mag:
-                zeropoints = np.array([f.Vega_zero_Jy.magnitude for f in filters])
+                zeropoints = np.array([f.Vega_zero_Jy.magnitude for f in self.filters])
                 self.value = zeropoints*10**(-(100**(-1/5))*value.value)
                 #self.uncertainty = value.value - zeropoints*10**(-(100**(-1/5))*(value.value+uncertainty.value))
                 unc_lower = self.value * (1.0 - 10**((-100**(-1/5))*uncertainty.value))
@@ -138,7 +142,7 @@ class Photometry(Data):
         elif isinstance(photunits, units.core.Unit):
             #next best case - value and uncertainty are dimensionless (or possibly a list/tuple of quantities) and we have a single unit for the inputs. We just have to convert from these to Jy
             if photunits == units.mag:
-                zeropoints = np.array([f.Vega_zero_Jy.magnitude for f in filters])
+                zeropoints = np.array([f.Vega_zero_Jy.magnitude for f in self.filters])
                 try:
                     self.value = zeropoints*10**(-(100**(-1/5))*value)
                     #self.uncertainty = value - zeropoints*10**(-(100**(-1/5))*(value+uncertainty))
@@ -169,7 +173,7 @@ class Photometry(Data):
             for i, pu in enumerate(photunits):
                 if pu == "mag" or pu == units.mag:
                     #convert from magnitudes to Jy
-                    zp = filters[i].Vega_zero_Jy.magnitude
+                    zp = self.filters[i].Vega_zero_Jy.magnitude
                     value[i] = zp*10**(-(100**(-1/5))*value[i])
                     #uncertainty[i] = value[i] - zp*10**(-(100**(-1/5))*(value[i]+uncertainty[i]))
                     unc_lower = value[i] * (1.0 - 10**((-100**(-1/5))*uncertainty[i]))
