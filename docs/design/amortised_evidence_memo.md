@@ -44,6 +44,16 @@ Phase 10 noise-model selection study the horizon memo already planned.
 The cross-fitted ENFR variant is the note's own hypothesis with no
 evidence anywhere; it stays a switch decided by the ablation.
 
+*Addendum, later on 2026-10-21.* §8 reads the proposals against the
+reserved horizons and the Phase 9–10 outlines; §9 reads the state-of-
+the-art survey Peter asked for (`sbi_state_of_the_art_2026.md`) against
+both. The survey changes one thing in the short answer above: because
+every ampere problem has an evaluable likelihood, the evidence route the
+literature favours — importance sampling under the amortised posterior,
+horizon (f)'s `correct` module — lands *first*, and ENFR is trialled
+against it (§9.1, D10). CF-NPE stands (§9.3). The decisions are D1–D13
+(§6 and §9.6); the draft items are W9.0–W9.D (§7 and §9.7).
+
 ## 1. Where the project stands (2026-10-21)
 
 - Phase 7 closed 2026-10-15 with `ampere-astro 1.0.0b2`; Phase 8 is drafted
@@ -565,3 +575,233 @@ one row. Either way the per-model evidences must be archivable with the
 ensemble's provenance, so that `compare` can read them later without the
 networks — the same "reconstructible from the archive alone" rule §9 (b)
 set for the interim prior.
+
+## 9. What the 2026 survey changes (added 2026-10-21, later the same day)
+
+`sbi_state_of_the_art_2026.md` is the survey Peter asked for: robust SBI,
+model comparison and evidence, SBI architectures and software, the
+likelihood side, and the astrophysical software landscape, January 2025
+to October 2026, with a candidate-tools table at its end. This section
+reads it against §§3–8 and against the Phase 9–10 outlines. Four
+findings change the framing above; the rest add items to the plan's
+horizons or to items already ruled.
+
+### 9.1 ampere always has a likelihood, and that reorders the evidence routes
+
+The note, and §3.2 above, framed ENFR as the simulator-only route to an
+evidence. The survey's one controlled study of amortised model
+comparison (Kucharský et al. 2025–26) finds that **posterior-based
+evidence routes beat direct evidence networks** in every case, that the
+direct networks stay poorly calibrated out of distribution with or
+without self-consistency training, and that self-consistency repairs the
+posterior-based routes only when a likelihood is evaluable. ENFR was not
+in that comparison and no paper in the window reports nats-level
+accuracy for any direct evidence network; the ENFR paper's own 0.5–0.8
+nats on BAO is the only number there is.
+
+ampere is in the position most SBI users are not: every problem has an
+evaluable likelihood, the GP marginal over the model's output. What SBI
+amortises in ampere is an *expensive model*, not an intractable
+likelihood. So the evidence route the survey favours is available here:
+the amortised posterior as proposal, the GP marginal likelihood times
+the prior as target, importance weights from the stored per-draw
+proposal densities — which is **horizon (f)'s `correct` module made an
+evidence producer**, with the importance-sampling efficiency per object
+as the certificate the astronomy landscape now expects (DINGO's
+`lvk-stable` line, BilbyFlow's 29 of 38 events above 1 % efficiency,
+Gebhard et al.'s retrievals). The hooks were decided at W5.0; the stored
+proposal density exists for every SBI run today; the module is a Phase 9
+filler already. Its cost per object is the likelihood at the draws, which
+for a radiative-transfer model without an emulator is the only thing
+that makes it expensive — and W8.4's emulator removes that.
+
+The consequence for ENFR is a narrower, more honest niche: **the survey
+scale at which even a few thousand likelihood evaluations per object are
+too many, and the genuinely likelihood-free case, which in ampere is
+rare.** An ENFR trial must therefore be scored against the
+importance-sampling route on the same bank, not only against nested
+sampling; if it does not win in nats where the posterior route is
+affordable, its place is the survey case alone. That is a cheaper and
+better-founded gate than the note's ladder, and W9.A should run it.
+
+### 9.2 Ground truth is now cheap on the jax backend
+
+GPU-native nested sampling (blackjax nested slice sampling, TMLR 2026;
+jaxns 3.0, both Apache-2.0) gives evidences "statistically identical" to
+the CPU implementations at 20–40× speed. The ladder's rung 1 (50 nested
+runs per model) stops being cluster work for any problem on the jax
+backend, which is also where the flagship's emulated model will live.
+Phase 10's jaxns item moves to Phase 9 as the strand's ground truth; the
+unconfirmed point is whether nested slice sampling is upstream in
+`blackjax` or in a fork, which W9.A checks. pocoMC, by contrast, has
+had no release since September 2024 and should be struck from Phase 10.
+
+### 9.3 CF-NPE stands, and has two cheaper neighbours to trial first
+
+No cross-fitting work beyond Regier's and no calibration-aware training
+loss since 2023 appeared, so CF-NPE has no published competitor on its
+own ground. Two cheaper things sit beside it: CP4SBI's post-hoc local
+conformal credible sets from the held-out simulations `calibrate()`
+already draws (MIT; better conditional coverage on 8 of 10 benchmarks
+for NPE flows), and the five-seed ensemble the practical guide found
+"well calibrated" where each member was slightly overconfident, whose
+pairwise-KL disagreement (Alvey et al.; MIT) is also a per-observation
+out-of-distribution flag. Both are S items on the artefact cache with no
+new mathematics, and both are honest comparisons for W9.B's acceptance
+row rather than substitutes for it: conformal sets calibrate the
+amortiser, not the model, and ensembles cost K trainings for a width that
+is not learned. Two test-design findings bear on W9.B's rows: coverage on
+average is not coverage per realisation (Alokda et al. 2026: variance and
+kurtosis disagree with likelihood-based inference even when coverage
+passes), and a population pipeline needed a post-hoc coverage
+calibration before combining per-object ratios (Jarugula et al. 2026).
+W9.B's validation should therefore include a fixed-parameter
+per-realisation check, which the M2 harness can carry.
+
+The self-consistency loss (Mishra et al.) is CF-NPE's natural companion
+— it, too, exploits the evaluable likelihood — and it needs a
+density-evaluable head, which pulls against the survey's other
+recommendation that flow matching become the default head. The engine
+should say which head is in use and why: spline flows where
+self-consistency is on, FMPE (or VP-EDM NPSE above about fifty
+parameters) elsewhere, all in the locked `sbi 0.27`.
+
+### 9.4 The GP inside the simulator is unoccupied, and RVNP is the warning
+
+No published work puts a GP residual model inside the simulator for
+neural SBI (an absence from searches, not a review's statement). The
+nearest neighbour is RVNP on 1,053 Gaia XP spectra, where a free
+θ-dependent error covariance collapsed and lost the metallicity; the
+survey reads that as independent evidence that the residual model needs
+a kernel-structured prior with few hyperparameters, which is ampere's
+construction. Rotman et al. (ApJ 2025) give the thesis its first
+controlled number on real instruments: abundance offsets of 1.2–4.6 dex
+fall to 0.2–0.4 dex with a global-plus-local GP, the misfit localised to
+one bin, and the GP *not* preferred when no correlated noise was
+injected. The comparison study W9.D proposes is, by that reading, a
+paper: the kernel-structured residual against a free covariance on the
+same XP-style task, with the bank shared with the evidence work. This is
+the strand's strongest scientific claim and belongs in D12's list of
+component-led papers.
+
+### 9.5 What else the survey adds to the plan (by phase)
+
+Items that are ruled or in flight, where one sentence now saves rework:
+
+- **W8.5 (photometry and the filter library)**: `speclite 1.0` is a live
+  filter library and `sedpy` is dead since 2020; the item's SVO fetch
+  stands, and speclite is the fallback bundle candidate D11 wants struck at
+  `1.0.0`.
+- **W8.16 (`FixedCovarianceNoise`)**: when the covariance is *estimated*
+  (an azimuthal average's bins, an emulator's residual covariance), the
+  Sellentin–Heavens correction and Heavens, Whiteway and Sellentin's
+  (2026) Student-t with extra Gaussian error sources are the right family;
+  a `family="student_t"` route on the same component is the hook, and it
+  is the concrete recipe for W8.3's "emulator error as a noise component".
+- **W8.3 (the emulator memo)**: Różański and Ting's scaling law (10× compute
+  for ~7× lower MSE) and the asteroseismology rule "residuals below the
+  survey's uncertainty or model them" are the budgeting rules; multi-
+  fidelity NPE (ICLR 2026, up to 100× fewer high-fidelity simulations) is
+  horizon (a)'s consumer and wants the fidelity column in the bank.
+- **W8.6 (`compare`)**: `harmonic 1.3.1` now carries flow-based
+  Savage–Dickey as well as the learnt harmonic mean, so one dependency
+  covers two of its five estimators — subject to reading its second
+  licence file; the importance-sampling evidence of §9.1 is a sixth
+  estimator the table should name from the start.
+- **W5.16 (the RHMF trial, deferred)**: Hilder, Hogg, Casey and Rix's
+  robust heteroskedastic matrix factorisation is accepted in ApJ (2026)
+  with a JAX implementation applied to Gaia RVS; the deferral's revisit
+  trigger has fired, and D8's "family A's first content" question now has
+  two candidates.
+- **W7.10's jax scan provider**: `smolgp` (AJ 2026; associative-scan
+  state-space GP, exposure integration, quasiperiodic kernels,
+  tinygp-compatible) is its direct successor and the benchmark to run at
+  W8.7's solver table.
+- **The docs**: the `sbi` practical guide's validation chain (prior-
+  predictive check, pre-training misspecification test, posterior
+  predictive checks, global then local coverage, "necessary but not
+  sufficient") is the checklist the SBI page should state; `sbi 0.27`'s
+  two misspecification tests are wired in a filler, with the documented
+  caveat that one high-dimensional observation has weak power.
+- **Kernels and M2**: Rotman et al.'s localised Gaussian-bump kernels
+  with free centres are a kernel-sum recipe the horseshoe already selects
+  over, and their MSE (bias² + variance) metric is a reporting form the M2
+  rows can add.
+
+Phase 9 and 10 additions and removals:
+
+- Phase 9 gains, as fillers: the importance-sampling evidence and
+  per-object efficiency (S–M, on `correct`), CP4SBI and the ensemble flag
+  (S each), the `sbi` misspecification tests (S), FMPE/NPSE as selectable
+  heads with the head recorded in provenance (S), jaxns or blackjax nested
+  slice sampling as the GPU evidence engine (S, from Phase 10), and an
+  online fresh-batch training loop for emulated models (S–M).
+- Phase 9's population work takes two findings: per-object draw budgets
+  far above 2 × 10³ before reweighting (two 2026 papers quantify the
+  Monte Carlo failure), and a learned population prior as a prior node
+  (pop-cosmos' diffusion prior, with its admitted overconfidence as the
+  calibration target). The store memo should weigh a stored evidence
+  network (§8.1 (b)) beside draws and ratios.
+- Phase 10 loses pocoMC and the noise-model study (absorbed by W9.D), and
+  keeps jaxns only if Phase 9 did not take it.
+- Not adopted: RoPE and minimum-distance summaries (need labelled pairs
+  or many i.i.d. observations), direct evidence regressors, LtU-ILI
+  (pins `sbi` ≤ 0.22), swyft, lampe, `nbi`, `sedpy`; BayesFlow 2 on jax
+  stays the watch item for jax-native SBI, which answers the plan's §6
+  deferral with "not yet, and not sbijax/flowjax".
+
+### 9.6 The decisions, revised
+
+D1–D9 of §6 stand with these changes:
+
+- **D1** (placement): unchanged — Phase 9 strand, W9.A early; but the
+  strand opens with the importance-sampling evidence on `correct`, not
+  with ENFR.
+- **D3** (memo first): W9.A's reproduction gains the comparison that
+  decides ENFR's place — ENFR against the importance-sampling route on
+  the same bank, scored in nats against GPU nested sampling.
+- **D5** (CF-NPE's acceptance): add the per-realisation check and the
+  CP4SBI and ensemble rows as comparisons.
+- **D8** (the goodness-of-fit screen's home): two candidates for family
+  A now — the amortised p-value and the landed RHMF.
+
+Added:
+
+- **D10 — the evidence route's order.** The importance-sampling evidence
+  under the amortised posterior (horizon (f), `correct`) lands first and
+  is the default amortised evidence; ENFR is trialled against it and
+  takes the survey-scale and likelihood-free cases only if it wins.
+  *Recommended: so.*
+- **D11 — ground truth.** jaxns or blackjax nested slice sampling pulled
+  from Phase 10 into Phase 9 as the jax-backend evidence engine and the
+  ladder's rung-1 reference; pocoMC struck. *Recommended: so, the
+  upstream question checked at W9.A.*
+- **D12 — the paper.** The kernel-structured residual against a free
+  covariance on an XP-style task (W9.D's design) as one of the
+  component-led papers of the Phase 8 ruling's D12. *Recommended: yes,
+  with W9.D drafted to produce it.*
+- **D13 — the small hooks now.** The sentences in §9.5 for W8.5, W8.16,
+  W8.3 and W8.6 added to their texts before dispatch. *Recommended:
+  yes.*
+
+### 9.7 The draft items, revised
+
+- **W9.0 — Importance-sampling evidence and per-object efficiency** [S–M;
+  Opus] (new; before W9.A): `ampere.results.correct` (horizon (f), the
+  Phase 9 filler) returning, for any run with a stored proposal density,
+  the Pareto-smoothed importance weights, `k̂`, the efficiency, and the
+  evidence with its error, written as the triple with
+  `ampere_evidence_method = "importance_sampling"`; the efficiency and
+  `k̂` as the per-object certificate on every SBI run's summary; the
+  M2 toy's evidence against dynesty as the pinned row. Depends on
+  nothing. This is the item §9.1 makes first.
+- **W9.A** gains: the ENFR-against-W9.0 comparison in nats on the
+  Gaussian mixture and the M2 toy; the NRE-overfitting probe of §8.1 (b);
+  the `blackjax`/jaxns check of D11; the head question of §9.3.
+- **W9.B** gains: CP4SBI and the five-seed ensemble as comparison rows;
+  the per-realisation variance and kurtosis check; the head recorded in
+  provenance.
+- **W9.C** is conditional on W9.A's comparison and narrows to the survey
+  and likelihood-free cases if ENFR does not win where W9.0 is
+  affordable.
+- **W9.D** is drafted as the paper of D12.
