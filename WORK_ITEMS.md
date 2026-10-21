@@ -4475,7 +4475,7 @@ engines' tolerance with the measured coverage pinned; `sbi.rst`'s "Very
 slow models" section rewritten to send the cheap-foreign case to W8.0 and
 the expensive case here; the decision-log row; gates all three (+ sbi).
 
-### W8.5 — Catalogue photometry: the `FilterLibrary` from SVO, `read_photometry`, `ampere.photometry` [M; Opus] (horizon §5.1; issue #64)
+### W8.5 — Catalogue photometry: the `FilterLibrary` from SVO, `read_photometry`, `ampere.photometry` [M; Opus] (horizon §5.1; issues #64 and #84; wave 1 — D4 amended 2026-10-22)
 The SED-fitting entry point most users start from. (1) A v2
 `FilterLibrary` fetched from the SVO Filter Profile Service by filter
 name with a local cache directory (no new dependency unless the item finds one necessary and says so) and a pinned
@@ -4494,9 +4494,34 @@ photometry (SED) service's VOTable through `astroquery` (optional) into
 limits into `Censoring` (W7.11's pattern), refusals by name for an
 unknown filter and an ambiguous unit. (3) The front door
 `ampere.photometry` by W7.3's pattern (the kind, the steps, the reader,
-the library). **Depends:** nothing. **Accept:** the library's rows (a
+the library). (4) **Issue #84 folded in (Peter, 2026-10-22)**: the library
+also holds filters defined by their edges rather than fetched —
+`TopHat(name, blue, red)` and `from_windows(name, windows)` for a set of
+spectral windows (the legacy `gen_alma_effective_filter_curve.py`'s
+construction and the star-disc twin's `photometry_step`, promoted;
+`detector="energy"`) — with a built-in table of the ALMA bands B1–B10 at
+the Technical Handbook's band edges under the names the twin and the
+issue use (`ALMA/ALMA.B6`; **ALMA is not on the SVO**, so this is the only
+route), and the ATCA and LABOCA top-hats the twin hand-rolls moved onto
+it; the vendored snapshot seeded from the issue's 41-row `filters.csv`
+(the legacy `makeFilterSet.py` two-column form — ampere name, SVO name —
+which `FilterLibrary.from_csv` reads, so a user's own list builds a
+library the same way; SCUBA-2 450/850 are already the bundle's
+`JCMT_SCUBA2_450`/`_850`; AKARI, APEX, Euclid and Roman fetched by SVO
+name); the refusal for an unknown name lists the library's near matches
+case-insensitively — the PR #83 lesson, where `STROMGREN_b` against the
+bundle's `STROMGREN_B` was dropped silently by the legacy reader; and a
+short section in `photometry_spectra.rst` on the legacy route for
+paper-era scripts (a local `.hd5` from `makeFilterSet.py` passed as
+`libName=`), since the paper's revision runs on legacy. **Priority
+(Peter, 2026-10-22): completed as early in Phase 8 as possible — a wave-1
+slot (D4 amended).** **Depends:** nothing. **Accept:** the library's rows (a
 pinned filter's zero point and pivot against SVO's published values;
-offline skip; the cache); the reader's rows on the two fixtures and the
+offline skip; the cache); the ALMA, top-hat and window rows (a band's
+pivot against the handbook's edges; the twin's three top-hats reproduced
+from the library to 1e-12); the `from_csv` row on the issue's file (offline:
+the SVO names resolved against the snapshot) and the near-match refusal
+row; the reader's rows on the two fixtures and the
 refusals; the star-disc twin reading its VOTable through it; `import
 ampere` still legacy-free and the wheel smaller by the bundle's size if
 D-ruled; `photometry_spectra.rst`'s reader section; gates dev.
@@ -4813,6 +4838,7 @@ reasoning is the horizon memo's §11 and the user-journeys memo's §5–§6.
   **Ruled 2026-10-15: `1.0.0b3`; the final's criteria at Phase 9's drafting.**
   **Ruled 2026-10-15: the front doors; no new namespace.**
   **Ruled 2026-10-15: IRS first, then the memo's order; W8.12 timed to W8.2.**
+  **D4 amended 2026-10-22 (Peter, on issue #84 and PR #83 — the paper's re-submission): W8.5 completes as early in Phase 8 as possible — it takes a wave-1 slot beside W8.0; W8.16 then W8.2 follow in the other slot; W8.10 after W8.5 (its PR #82 fixture and PR #83's Strömgren rows are both merged). Issue #84 is folded into W8.5 (4); the issue reply is Peter's, later.**
   **Ruled 2026-10-15: as drafted.**
   **Ruled 2026-10-15: both, W8.0 first.**
 
