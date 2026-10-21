@@ -407,3 +407,161 @@ side `chi_square_pvalue()` and the GP absorbed-power diagnostics; the
 RHMF deferral re-ruled in the same decision-log row. **Depends:** W9.C.
 **Accept:** the contract's family A row amended with its decision-log
 entry; the screen on the M2 scenarios; gates dev + `sbi`.
+
+## 8. The fit with the design horizons and with the Phase 9–10 outlines (added 2026-10-21)
+
+Peter asked for the elaboration before ruling: how the two proposals sit
+against the horizons the plan reserves (`DEVELOPMENT_PLAN.md` §5, "Design
+horizon", (a)–(i)), against the inference-extensions memo's rulings of
+2026-09-10, the horizon notes of 2026-09-09, the user-journeys ranking,
+and the Phase 9 and 10 shapes in `horizon_beyond_phase7.md` §9.
+
+### 8.1 Against the nine reserved horizons
+
+| Horizon | What it reserved | What ENFR / CF-NPE do with it |
+|---|---|---|
+| (a) Multi-fidelity | Fidelity tags on channels and registrations; "the training-set format carries fidelity per sample (a column, not an attr)" (inference memo §9) | A shared simulation bank mixing an emulator's draws with the simulator's is the first place that column is read: an ENFR member trained on the cheap fidelity and corrected on the expensive one is the method's own two-step shape (flow then classifier) applied across fidelities. Nothing to reserve beyond what §9 already asked; W8.3's bank contract should carry the column. |
+| (b) Population by post-processing, at scale | Per-draw `log_prior`/`log_likelihood` stored; the columnar store; "NRE is the natural amortised estimator for population inference" because the per-object term is `p(xᵢ|Λ) = ∫ p(xᵢ|θ) π(θ|Λ) dθ` and a ratio needs no interim prior (§8.1) | Two things. CF-NPE's stage-2 density is a proper `log_prob`, so a CF-NPE run stores its own proposal density per draw and the reweighting route works as for NPE — with honest widths, which is what keeps the effective sample size from collapsing when the population prior narrows. More interesting: an evidence network **conditioned on the hyperparameters Λ** estimates `p(xᵢ|Λ)` directly — the per-object term the population objective sums — amortised over objects *and* over Λ, so the SVI over minibatches of sources that §8.1 wanted runs on a stored network with no draws at all. That is the ratio-estimator argument of §8.1 with ENFR's absolute normalisation; it is a horizon idea for Phase 9's hierarchical SBI, not an item. One question for W9.A: does an NRE classifier trained for many epochs on a fixed bank show CF-NPE's defect (its loss is also unbounded for a flexible network)? If so, cross-fitting belongs to the ratio route too. |
+| (c) Emulation | Serialisable training sets; the emulator as a `Model`; its predictive variance as a noise component; the emulator's identity in every dependent cache key | The emulator is what makes ENFR's budget (10⁵ simulations per model in the paper) reachable for a radiative-transfer model: the pipeline is simulator → `train_emulator` (W8.4) → cheap emulated simulator with its error component → bank → evidence. Because the error component is part of the simulator, the evidence is honestly that of "emulated physics + emulator error + GP". The reservation to add: an ENFR ensemble's cache key includes the emulator's training-set identity, exactly as §9 (c) asks for any dependent artefact. |
+| (d) Hierarchical SBI | Plate-aware groups; a `simulate()` drawing hierarchically; a set-of-sets embedding; "`EncodingLayout` is not assumed to have a fixed leading dimension" | CF-NPE's regime (tens to hundreds of parameters) is the population-level amortised posterior — the hyperparameters plus every member — not the per-object fit. Hierarchical SBI is therefore CF-NPE's Phase 9 customer, with W8.2's `LatentProfile` and images the customers it has before then. The encoding reservation stands unchanged. |
+| (e) Model comparison and averaging | The evidence triple; consumers "nested sampling, SMC and Laplace, `harmonic`, bridge, Savage–Dickey, LOO/WAIC, BMA" | The list has no simulator-only producer. ENFR is it, and the first producer whose `ampere_evidence_method` is a learned estimator with a validation rung — the vocabulary question `inference.md:1156` left open. Add one line to the horizon: "an amortised evidence estimator for problems without a likelihood, consumed by the same table". |
+| (f) Approximate-inference correction | The proposal's own log-density per draw; `ampere_approximation` names the family; PSIS reweighting with `k̂` stored | A CF-NPE run is a correctable proposal like any NPE run; its `k̂` under `correct` (Phase 9 filler) is a per-observation overconfidence flag that complements the ensemble scatter and the extrapolation flag. ENFR's reference flow `log q(x)` is itself a proposal density over *data*, which is what its extrapolation flag reads; nothing to reserve. |
+| (g) Engines as a registry, cost accounting | A registry; one cost record per engine, per fidelity | An evidence engine's cost record is simulations per model, failures by kind, trainings per member — the fields the note's `ampere_enfr_failure_fraction` and `_budget` already name; they should be the shared cost record, not a private family. The engine battery (inference memo §4: "SBC for every engine, for free") gains a row that rank-calibrates model probabilities on held-out simulations — the ladder's rung 2. |
+| (h) Vector observables with correlated misspecification | The joint noise model binds to the channel pairing | Untouched; a comparison that includes the joint GP draws from it like any other (§3.3). |
+| (i) Amortisation over observation context | `context=` on `simulate_many`/`SBIEngine`; the σ column mandatory | ENFR trained under a `ContextPrior` is an evidence valid across a survey's noise levels, which is the whole case for amortising it; the engine takes the same `context=`. The horizon notes' further step — amortising over instruments (§5: the grid, the resolution, the filter set as per-draw inputs) — remains the open item it was, and applies to both methods equally. |
+
+### 8.2 Against the inference-extensions memo's rulings
+
+- **Every new sampler behind its own extra** (ruling 7.4). Both methods
+  live behind `sbi`, which already resolves `zuko`; no new extra.
+- **The stored proposal density is the rule** (ruling 7.1). CF-NPE
+  satisfies it by construction; ENFR has no draws (§8.7).
+- **BO is acquisition, not an engine** (ruling 7.3). The ENFR paper's
+  finding that the classifier correction matters most at small budgets
+  makes acquisition for the *bank* — where to simulate next so the
+  evidence's error falls fastest — the same question W8.3's memo already
+  owns for the emulator; one answer for both.
+- **§8.4's `compare` as the one-line table.** ENFR's `evaluate` should
+  return W8.6's typed comparison result, so that a nested-sampling
+  comparison and an amortised one render identically and the method
+  column tells them apart.
+
+### 8.3 Against the horizon notes (embeddings, context)
+
+The horizon notes' follow-up on embeddings (§4/5) ranked DeepSets, set
+transformers, neural-process encoders (ConvCNP) and neural-operator
+branch nets as embeddings for the W3.3 encoding, and recorded the trap
+that makes the packing the contract. Both proposals consume that packing
+unchanged. What they add to the embedding question is one requirement:
+an embedding trained for *parameter* inference may discard what
+*discriminates models*, so the evidence engine trains its own (or trains
+a shared one jointly with the classifier), and the ConvCNP experiment the
+notes recommended is as relevant to the evidence network as to the
+posterior. The context programme (§4) is the mechanism that makes an
+amortised evidence worth having at all.
+
+### 8.4 Against the user-journeys ranking
+
+By persona weight (user-journeys §6) the model-comparison module serves
+A, B and C (60 %, rank 4) and the SBI-side items serve C and E (40 %,
+rank 8–14). ENFR inherits the first weight *through* `compare` and the
+second directly; CF-NPE serves C and E only. Neither is a top-five item
+by that table, and the memo should not pretend otherwise. What lifts
+them is the flagship and the papers: the Phase 9 flagship's first
+question (oxygen-rich against carbon-rich dust across SAGE) is amortised
+model comparison across a survey, the catalogue loop's listed output "the
+evidence contrast grid versus blackbody per object, and the objects the
+grid cannot explain" (user-journeys §3) is exactly `evaluate` plus
+`gof_pvalue` at survey scale where nested sampling per object is too
+expensive, and D12's component-led science papers on NESS data are
+papers about population models and model comparison. The honest ranking:
+below the convergence, units and reader items; level with the correction
+module; above the IFU cube until a cube user appears.
+
+### 8.5 The Phase 9 outline, re-read with the strand
+
+Phase 9 as shaped (horizon §9; Q3 ruled "Phase 9 by plan") is: the
+nested-populations memo and item (L, first, alone on the parameter
+layer), hierarchical SBI (M, after it), the columnar store and population
+inference at scale (L, with a store memo), the IFU cube (L), with the
+light-curve and Gaia readers, `correct` (M) and polarimetry (S–M) as
+fillers; SAGE with GRAMS as the amortised-SBI flagship; the catalogue
+loop as an example before the store. Where each proposal attaches:
+
+- **W9.A (the memo and reproduction)** has no dependency and is Fable's
+  own work; it can run between Phase 8's waves, as W8.3 does, so that
+  Phase 9's drafting has numbers. It should also answer the NRE question
+  of §8.1 (b), because the store memo's choice of per-object columns
+  (draws against a stored ratio or evidence network) depends on it.
+- **W9.B (`cf-npe`)** has two customers in order: W8.2's `LatentProfile`
+  under SBI (the misspecification-aware simulator the radial-profiles
+  design named; a latent GP's coefficients are a many-parameter vector)
+  the moment Phase 8 closes, and hierarchical SBI's population-level
+  posterior once that lands. Draft it after the nested-populations item,
+  in the slot beside hierarchical SBI, with the `LatentProfile` row as
+  its first acceptance problem and the population row added when
+  hierarchical SBI merges.
+- **W9.C (the evidence engine)** serves the flagship and the catalogue
+  loop. It needs W8.6's result type and the emulated GRAMS-style grid (the
+  flagship's own model work) — so it sits in the flagship's wave, with the
+  chemistry comparison and the per-object goodness-of-fit screen as its
+  acceptance rows beside the Gaussian-mixture and M2 rows of §7.
+- **`correct` (filler)** pairs with W9.B: the `k̂` flag on a CF-NPE run is
+  its per-observation check, and the correction module is the route from
+  an honest amortised posterior to the population reweighting the store
+  serves. Keep them adjacent.
+- **The store memo** should take the §8.1 (b) conditional-evidence idea
+  as one of the per-object representations it weighs, beside draws and
+  ratios.
+- **W9.D (the comparison study)** closes the strand after W9.C and W8.6;
+  it is the measured table the docs' "which kernel?" guidance needs and
+  the first paper-shaped result of the strand.
+
+Nothing in the strand touches the parameter layer, so none of it collides
+with the nested-populations item; all of it is torch-side under the `sbi`
+extra, so it runs beside jax-side Phase 9 work without sharing files.
+
+### 8.6 The Phase 10 outline, re-read
+
+Phase 10 as shaped is pocoMC and jaxns (S each, behind extras), the
+noise-model selection study (M), the declarative problem file (S–M), the
+cookbook and gallery (M), conda-forge, and `1.0.0` with its criteria.
+Three consequences:
+
+- **The noise-model selection study is absorbed** by W9.D and moves
+  earlier, with the amortised route beside the nested one; Phase 10 loses
+  an M item.
+- **pocoMC and jaxns become evidence producers** for the same table (SMC
+  gives an evidence as a by-product; jaxns runs on the jax problem on the
+  GPU), which makes them the natural ground truth for the ladder's rung 1
+  on problems where dynesty is slow — a reason to pull them into Phase 9's
+  fillers rather than leave them for Phase 10, if slots allow.
+- **`1.0.0`'s criteria** (horizon §8: the known-limitations list reduced to
+  what is deliberate, conda-forge, the paper's examples pinned, v2's
+  deprecations removed, the Zenodo record) are unaffected provided the
+  evidence engine ships *experimental* behind the extra, with the
+  validation rung it reached in every result and the docs saying what
+  "experimental" means — a learned evidence that has not passed rung 1 on
+  the user's own problem is a number with a caveat, and the known-
+  limitations list says so. CF-NPE needs no such caveat: it is an
+  ordinary amortised posterior that `calibrate()` checks.
+
+### 8.7 One output-shape question the note missed
+
+`Engine.finish` assembles equal-weight draws into a run, and every run in
+`results.md` has a `posterior` group. An evidence engine produces no
+draws: its output per observation is a table of evidences with errors, a
+goodness-of-fit p-value and the provenance of the ensemble. The
+optimisers met the same problem and were given the `optimum` group by
+ruling (inference memo §7.2, W6.7). The two routes: (i) **reuse W8.6's
+typed comparison result** — the Bayes-factor table that bridge sampling
+and Savage–Dickey already return — so that an amortised comparison and a
+nested-sampling one are the same object with a different method column
+(recommended; this is the Phase 8 hook of §4.1 made precise: W8.6
+defines the result type with a future producer in mind); or (ii) a new
+group with its own `results.md` decision-log row at W9.C. Route (i)
+keeps the "no §4 change" claim of §0 true; route (ii) makes it false by
+one row. Either way the per-model evidences must be archivable with the
+ensemble's provenance, so that `compare` can read them later without the
+networks — the same "reconstructible from the archive alone" rule §9 (b)
+set for the interim prior.
