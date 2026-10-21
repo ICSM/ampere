@@ -10,22 +10,22 @@
    <DATA>
     <TABLEDATA>
      <TR>
-      <TD>STROMGREN_b</TD>
+      <TD>STROMGREN_B</TD>
       <TD>2.945E+00</TD>
       <TD>5.890E-02</TD>
      </TR>
      <TR>
-      <TD>STROMGREN_u</TD>
+      <TD>STROMGREN_U</TD>
       <TD>0.241E+00</TD>
       <TD>4.820E-03</TD>
      </TR>
      <TR>
-      <TD>STROMGREN_v</TD>
+      <TD>STROMGREN_V</TD>
       <TD>1.742E+00</TD>
       <TD>3.484E-02</TD>
      </TR>
      <TR>
-      <TD>STROMGREN_y</TD>
+      <TD>STROMGREN_Y</TD>
       <TD>3.583E+00</TD>
       <TD>7.166E-02</TD>
      </TR>

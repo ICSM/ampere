@@ -1,6 +1,6 @@
 """``examples/star_disc`` reads HD 105's data, builds and fits (W6.13 (6)).
 
-Fast: the votable's nineteen points (seventeen library filters, two
+Fast: the votable's twenty-three points (twenty-one library filters, two
 top-hats), the dust term against a hand-written reference, the photosphere's
 continuity where the emulator hands over to its extrapolation, the IRS reader
 on the tracked CASSIS file of :mod:`examples.linear_sed`, and a tiny
@@ -32,13 +32,16 @@ TINY = {"walkers": 22, "steps": 12, "burn_in": 4}
 
 
 class TestTheData:
-    def test_the_votable_has_nineteen_points_seventeen_in_the_library(self) -> None:
+    def test_the_votable_has_twenty_three_points_twenty_one_in_the_library(self) -> None:
         names, flux, error = generators.read_votable()
-        assert len(names) == 19 and flux.shape == error.shape == (19,)
+        assert len(names) == 23 and flux.shape == error.shape == (23,)
+        # PR #83's Strömgren rows under the library's upper-case names (the
+        # legacy reader drops a name the library does not hold, silently).
+        assert names[:4] == ["STROMGREN_B", "STROMGREN_U", "STROMGREN_V", "STROMGREN_Y"]
         assert set(TOPHATS) - {"APEX/LABOCA.870"} <= set(names)  # LABOCA is the CSV's
         step = photometry_step(names)
         assert list(step.detectors[-2:]) == ["energy", "energy"]
-        assert len([n for n in names if n not in TOPHATS]) == 17
+        assert len([n for n in names if n not in TOPHATS]) == 21
 
     def test_the_top_hats_have_the_stated_widths(self) -> None:
         (a_blue, a_red), (b_blue, b_red) = TOPHATS["ALMA/ALMA.B6"], TOPHATS["ATCA/ATCA.9mm"]
@@ -122,8 +125,8 @@ class TestTheFit:
         dataset = with_limits.datasets["photometry"]
         censoring = dataset.likelihood.censoring
         assert censoring is not None
-        assert (censoring.n_samples, censoring.n_censored) == (21, 2)
-        assert dataset.likelihood.to_spec()["censoring"] == {"n_samples": 21, "n_censored": 2}
+        assert (censoring.n_samples, censoring.n_censored) == (25, 2)
+        assert dataset.likelihood.to_spec()["censoring"] == {"n_samples": 25, "n_censored": 2}
         predicted = with_limits.simulate(values).predicted["photometry"].values[-2:]
         recorded = np.asarray(dataset.observed.values)[-2:]
         sigma = np.asarray(dataset.observed.uncertainty)[-2:]
