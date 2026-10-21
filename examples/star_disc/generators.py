@@ -1,6 +1,8 @@
 """The data for ``examples.star_disc``: HD 105's photometry, the RVS spectrum, IRS.
 
-* :func:`read_votable` reads the tracked ``HD105_SED.vot`` (nineteen rows) --
+* :func:`read_votable` reads the tracked ``HD105_SED.vot`` (twenty-three rows: the
+  four Strömgren ``uvby`` points of PR #83, 2026-10-16, then the nineteen of
+  before) --
   the file the legacy ``examples/star_disc.py`` reads through
   ``Photometry.fromFile(..., format="votable")``.
 * :func:`read_limits` reads the two rows of ``HD105_SED.csv`` flagged as upper

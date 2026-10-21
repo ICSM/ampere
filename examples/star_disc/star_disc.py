@@ -48,9 +48,12 @@ read from the emulator's own R = 11 000 segment.
 
 The data
 --------
-* ``"photometry"``: the votable's nineteen points as one
-  :class:`~ampere.core.PhotometricPoints`. Seventeen filters come from the
-  bundled library through ``SyntheticPhotometry.from_library``. The other two,
+* ``"photometry"``: the votable's twenty-three points as one
+  :class:`~ampere.core.PhotometricPoints`. Twenty-one filters come from the
+  bundled library through ``SyntheticPhotometry.from_library`` (the four
+  Strömgren ``uvby`` points added by PR #83 on 2026-10-16 under the library's
+  upper-case names ``STROMGREN_U`` ... ``STROMGREN_Y``; the legacy reader
+  silently drops a name the library does not hold, so the case matters). The other two,
   ``ALMA/ALMA.B6`` and ``ATCA/ATCA.9mm``, are not in the library and are
   top-hats (``detector="energy"``): ALMA band 6 as 211-275 GHz (1.090-1.421
   mm), ATCA 9 mm as 30-38 GHz (7.889-9.993 mm). The legacy comment
@@ -74,7 +77,7 @@ The data
   does not carry them, so the legacy never used them. The twin adds them, by
   default (``build_problem(limits=True)``), as censored observations:
   :func:`.generators.read_limits` reads the two flagged rows, the photometry
-  holds twenty-one points (the votable's nineteen, then the two), and
+  holds twenty-five points (the votable's twenty-three, then the two), and
   ``Censoring.upper_limits(flags)`` on the photometry's ``Likelihood`` makes
   each contribute the probability that the true flux lies below the recorded
   one (``likelihoods.md`` section 9) rather than a Gaussian density. SPIRE 500
@@ -86,7 +89,7 @@ The data
   and 10.7 against 17.7 mJy) that the catalogue flagged, not stated
   3 sigma limits; declaring 3 sigma as the recorded value would
   be the alternative reading, and is not done. ``limits=False`` is the
-  nineteen points with no declaration. The recorded uncertainties (7 and
+  twenty-three points with no declaration. The recorded uncertainties (7 and
   5.9 mJy) are large, so the censored terms bind only where the model is
   well above the limit: on the real data the fitted model already sits at
   0.1-1 mJy at both bands, and the posterior moves by less than the chains'
@@ -118,6 +121,10 @@ What changed in the translation
 
 Coverage run (Accept criterion)
 -------------------------------
+*Measured on the votable as it stood on 2026-10-08, nineteen points, before
+the four Strömgren rows of PR #83 (2026-10-16); the counts below are that
+run's and it has not been re-run on the twenty-three.*
+
 ``pixi run -e dev python -m examples.star_disc --synthetic``: the twenty-one
 photometric points (the votable's nineteen and the two limits, each replaced
 by the model at ``generators.SYNTHETIC_TRUTH`` plus noise at the CSV's own
@@ -155,6 +162,8 @@ GP length scale             9.1e-3     [4.7e-4, 2.4e-2]                         
 
 The real data's limits (measurement, 2026-10-08)
 ------------------------------------------------
+*Also measured on the nineteen-point votable, before PR #83's Strömgren rows.*
+
 Real HD 105 data, ``gp=True``, 40 walkers x 800 steps (200 burn-in), prior
 start, three seeds, without then with the declaration; posterior medians. The
 shift is below the chains' noise, with no stable sign:
@@ -493,8 +502,8 @@ def build_problem(
     """The composed problem: the votable (or its synthetic twin), RVS, optional IRS.
 
     With ``limits`` (the default) the photometry also holds the CSV's two
-    flagged upper limits as censored points, twenty-one in all; ``limits=False``
-    is the votable's nineteen with no declaration.
+    flagged upper limits as censored points, twenty-five in all; ``limits=False``
+    is the votable's twenty-three with no declaration.
     """
     rng = np.random.default_rng(seed)
     names, flux, error = generators.read_votable()

@@ -226,7 +226,7 @@ SPIRE 500 micron and LABOCA 870 micron, and the star-disc twin
 .. code-block:: python
 
     names, _, limit_flux, limit_error = generators.read_limits()  # the two flagged rows
-    names = [*votable_names, *names]                             # nineteen, then the limits
+    names = [*votable_names, *names]                             # twenty-three, then the limits
     flags = np.arange(len(names)) >= len(names) - 2             # True for the last two
     photometry = Likelihood(
         GaussianFamily(),
@@ -237,7 +237,7 @@ SPIRE 500 micron and LABOCA 870 micron, and the star-disc twin
 Each flagged point then contributes the log of the probability that the true
 flux lies *below* its recorded value, :math:`\log \Phi(z)` with :math:`z =
 (\text{recorded} - \text{predicted}) / \sigma`, in place of the Gaussian
-density; the other nineteen are untouched. This is the Tobit term of the
+density; the other twenty-three are untouched. This is the Tobit term of the
 likelihood contract (``docs/design/contracts/likelihoods.md``, section 9). Two
 rules go with it. A masked sample contributes nothing whatever its limit
 kind, so masking beats censoring. And a limit under a correlated-noise model
