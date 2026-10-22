@@ -303,11 +303,13 @@ per-PR budget, measured rows under `heavy` or on the cluster, and
 - **D1 — placement.** Phase 9 strand with W9.A between Phase 8's waves
   (recommended); or Phase 8 fillers; or a separate experimental track
   outside the phases. *Recommended: Phase 9, W9.A early.*
+  **Ruled 2026-10-22 (Peter): Phase 9 as recommended — the strand opens with the importance-sampling evidence (W9.0), W9.A early as Fable's own work between Phase 8's waves.**
 - **D2 — the home and the name.** An evidence engine in
   `ampere.inference` writing the triple, with `ampere.results.compare`
   (W8.6) the consumer (recommended); or the note's `ampere.comparison`
   namespace. *Recommended: `ampere.inference`; a front door later if
   wanted.*
+  **Ruled 2026-10-22 (Peter): `ampere.inference`; other options (a front door, a namespace) later if required or desired.**
 - **D3 — memo first, with a runnable reproduction.** W9.A reproduces the
   ENFR Gaussian-mixture benchmark and the CF-NPE Gaussian–Gaussian
   numbers in a prototype outside the package before any item is dispatched
@@ -316,9 +318,11 @@ per-PR budget, measured rows under `heavy` or on the cluster, and
   (`examples/evidence/` kept, or scratch and only the numbers kept).
   *Recommended: yes; `examples/evidence/` so the measurement is
   reproducible.*
+  **Ruled 2026-10-22 (Peter): yes — memo first, the reproduction kept in `examples/evidence/`, with §9.6's ENFR-against-importance-sampling comparison.**
 - **D4 — the reference density.** `zuko` (`CNF` by flow matching against
   `NSF` by maximum likelihood, measured) rather than the note's
   hand-rolled flow. *Recommended: `zuko`, measured at W9.A.*
+  **Ruled 2026-10-22 (Peter): `zuko`, CNF against NSF measured at W9.A.**
 - **D5 — CF-NPE's acceptance problem.** The 133-disc population (W8.9
   stage 2) at matched budget (recommended), or a synthetic many-parameter
   problem only. *Recommended: W8.9's population, with the synthetic
