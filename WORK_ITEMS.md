@@ -4515,7 +4515,15 @@ HDF library, whole or by name (a user's own `.hd5` built with
 `makeFilterSet.py`, and the relocated bundle of D13), and `makeFilterSet.py`'s
 local-CSV filter definition (two header lines: unit, detector) accepted by
 `FilterLibrary.add`, so the legacy tools around filter construction fold
-in; a docs section on porting from legacy filter libraries
+in; **a user's own tabulated curve** (Peter, 2026-10-22) through the same
+`add` — a name, the wavelength array with its unit, the transmission array
+and the detector convention (required, as the step's constructor insists;
+never guessed), from arrays, an astropy `Table`, a two-column text file or
+an SVO VOTable, stored as tabulated and interpolated only when a step is
+built — so that user, library and edge-defined filters resolve by name
+into one `SyntheticPhotometry` through `from_library` (the twin's
+hand-stitching of library rows and top-hats done once, in the package);
+the per-run library saved to a file (`save`/`load`) for reuse and sharing; a docs section on porting from legacy filter libraries
 (`migrating.rst` and `photometry_spectra.rst`) beside the one on the legacy
 route below; (Peter's reply on #84, 2026-10-22, is the public statement of
 this scope; SCUBA-2 450/850 are already the bundle's
@@ -4533,7 +4541,9 @@ offline skip; the cache); the ALMA, top-hat and window rows (a band's
 pivot against the handbook's edges; the twin's three top-hats reproduced
 from the library to 1e-12); the `from_csv` row on the issue's file (offline:
 the SVO names resolved against the snapshot) and the near-match refusal
-row; the reader's rows on the two fixtures and the
+row; a user-supplied table added by name and integrated against a
+hand-computed value under both detector conventions, mixed with a library
+filter in one step, and the library saved and reloaded unchanged; the reader's rows on the two fixtures and the
 refusals; the star-disc twin reading its VOTable through it; `import
 ampere` still legacy-free and the wheel smaller by the bundle's size if
 D-ruled; `photometry_spectra.rst`'s reader section; gates dev.
