@@ -786,13 +786,16 @@ Added:
   from Phase 10 into Phase 9 as the jax-backend evidence engine and the
   ladder's rung-1 reference; pocoMC struck. *Recommended: so, the
   upstream question checked at W9.A.*
+  **Ruled 2026-10-22 (Peter): jaxns pulled into Phase 9 as the jax-backend evidence engine and rung-1 reference; blackjax nested slice sampling and pocoMC stay in Phase 10 (pocoMC not struck).**
 - **D12 — the paper.** The kernel-structured residual against a free
   covariance on an XP-style task (W9.D's design) as one of the
   component-led papers of the Phase 8 ruling's D12. *Recommended: yes,
   with W9.D drafted to produce it.*
+  **Ruled 2026-10-22 (Peter): yes. And a second, earlier paper is to be prepared for out of Phase 8: the science interpretation of the detached-shell AGB star U Ant — its SED, infrared spectra, far-infrared/sub-millimetre radial profiles and ACA data fitted jointly, with warped GPs handling model misspecification (not the first such application in astronomy, but an early one). The two papers may be combined into one if that is better; the orchestrator's recommendation is to keep them separate (different results, audiences and timelines — U Ant is Phase 8's output, W9.D follows W9.C in Phase 9), with U Ant's residual structure informing W9.D's design and W9.D citing it. Recorded under Phase 8's D12 in `WORK_ITEMS.md`.**
 - **D13 — the small hooks now.** The sentences in §9.5 for W8.5, W8.16,
   W8.3 and W8.6 added to their texts before dispatch. *Recommended:
   yes.*
+  **Ruled 2026-10-22 (Peter): yes — subsumed: the W8.5 hook superseded by that item's 2026-10-22 amendments (issue #84), the W8.16, W8.3 and W8.6 hooks applied under D6 the same day. All thirteen decisions are ruled; the Phase 8 gate is lifted.**
 
 ### 9.7 The draft items, revised
 
