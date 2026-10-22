@@ -4483,8 +4483,11 @@ snapshot of the filters the tests and examples use vendored under
 `tests/data` with provenance, replacing the 45 MB `ampere_allfilters.hd5`
 bundled in the wheel (#64: "generate the library rather than download
 it") — the bundle stays as a fallback behind a loud warning naming the fix
-through the betas and goes at `1.0.0` or the first release candidate (D11,
-ruled 2026-10-15); `SyntheticPhotometry.from_library`
+through the betas and **leaves the wheel** at `1.0.0` or the first release
+candidate (D11, ruled 2026-10-15; **amended 2026-10-22 — the library itself
+is kept**: relocated out of the wheel to a hosted copy fetched on demand
+into the cache, or broken into smaller pieces — D13 — and read through the
+`from_pyphot` importer of (4)); `SyntheticPhotometry.from_library`
 reads the new library, `pyphot` becomes optional (its compat layer
 retired when the bundle goes). (2) `read_photometry`: a user's table of
 fluxes, uncertainties and filter names (astropy `Table`, CSV, VOTable —
@@ -4506,7 +4509,16 @@ route), and the ATCA and LABOCA top-hats the twin hand-rolls moved onto
 it; the vendored snapshot seeded from the issue's 41-row `filters.csv`
 (the legacy `makeFilterSet.py` two-column form — ampere name, SVO name —
 which `FilterLibrary.from_csv` reads, so a user's own list builds a
-library the same way; SCUBA-2 450/850 are already the bundle's
+library the same way — the documented example of building a library from
+a list); `FilterLibrary.from_pyphot(path)` importing an existing pyphot
+HDF library, whole or by name (a user's own `.hd5` built with
+`makeFilterSet.py`, and the relocated bundle of D13), and `makeFilterSet.py`'s
+local-CSV filter definition (two header lines: unit, detector) accepted by
+`FilterLibrary.add`, so the legacy tools around filter construction fold
+in; a docs section on porting from legacy filter libraries
+(`migrating.rst` and `photometry_spectra.rst`) beside the one on the legacy
+route below; (Peter's reply on #84, 2026-10-22, is the public statement of
+this scope; SCUBA-2 450/850 are already the bundle's
 `JCMT_SCUBA2_450`/`_850`; AKARI, APEX, Euclid and Roman fetched by SVO
 name); the refusal for an unknown name lists the library's near matches
 case-insensitively — the PR #83 lesson, where `STROMGREN_b` against the
@@ -4831,6 +4843,7 @@ reasoning is the horizon memo's §11 and the user-journeys memo's §5–§6.
   either way.**
   **Ruled 2026-10-15: no software paper for a monolithic release is planned now (one could be considered in the future). Peter's plan is papers that are primarily new scientific results and depend on particular components — the warped GPs, the population models — mainly on Nearby Evolved Stars Survey data; a Phase 9 consideration, with no effect on W8.8.**
   **Ruled 2026-10-15: the bundle stays as a fallback through the betas and is removed at `1.0.0`, or at the first release candidate if there is one — not at `1.0.0b3`.**
+  **D11 amended 2026-10-22 (Peter's reply on #84): the bundle leaves the wheel on that schedule, but the 898-filter library is kept — relocated or split, D13.**
   **Ruled 2026-10-15: wait for PR #82 to merge as it is; W8.10 then moves or copies the file to `tests/data` with its provenance row.**
   **Ruled 2026-10-15: as recommended.**
   **Ruled 2026-10-15: all five, `harmonic` behind the extra.**
@@ -4839,6 +4852,18 @@ reasoning is the horizon memo's §11 and the user-journeys memo's §5–§6.
   **Ruled 2026-10-15: the front doors; no new namespace.**
   **Ruled 2026-10-15: IRS first, then the memo's order; W8.12 timed to W8.2.**
   **D4 amended 2026-10-22 (Peter, on issue #84 and PR #83 — the paper's re-submission): W8.5 completes as early in Phase 8 as possible — it takes a wave-1 slot beside W8.0; W8.16 then W8.2 follow in the other slot; W8.10 after W8.5 (its PR #82 fixture and PR #83's Strömgren rows are both merged). Issue #84 is folded into W8.5 (4); the issue reply is Peter's, later.**
+- **D13 — the legacy filter library's new home** (Peter's reply on #84,
+  2026-10-22: "move it to somewhere else or break it up into smaller
+  pieces"): (a) **relocated whole** — the 898-filter `ampere_allfilters.hd5`
+  published once as a GitHub release asset (or a Zenodo file with its own
+  DOI), fetched on demand into the cache by W6.12's download-and-cache
+  pattern with an offline skip, read through `from_pyphot`, its provenance
+  the legacy `makeFilterSet.py` run that built it; (b) **split** into
+  per-facility pieces (HDF or CSV) in a data repository, fetched by
+  facility; or (c) both. **Recommended: (a)** — one artefact, no rebuild, the
+  provenance intact, and the per-run SVO fetch already gives the small
+  library; (b) only if a hosting limit forces it. **Open**; W8.5 proceeds
+  on (a) unless Peter rules otherwise before its dispatch.
   **Ruled 2026-10-15: as drafted.**
   **Ruled 2026-10-15: both, W8.0 first.**
 
