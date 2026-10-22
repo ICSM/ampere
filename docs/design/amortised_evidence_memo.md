@@ -341,10 +341,12 @@ per-PR budget, measured rows under `heavy` or on the cluster, and
   content, re-opening the RHMF question with a better-founded candidate;
   or a method on the engine only. *Recommended: decide at W9.A with the
   numbers; the engine method either way.*
+  **Ruled 2026-10-22 (Peter): open `ampere.diagnostics` as soon as the first family-A method is implemented, but measure RHMF's impact first (W5.16's revisit, its trigger fired — before or at W9.A); if RHMF does not earn the namespace, ENFR's p-value creates it, because the p-value is free and is to be used either way.**
 - **D9 — compute.** The BAO/DESI reproduction and rung 1 at 50 nested
   runs per model are cluster runs on Peter's word (W8.7's pattern);
   everything pinned per PR is CPU-small. *Recommended: so, budgeted in
   W9.A's and W9.C's text.*
+  **Ruled 2026-10-22 (Peter): the cluster pattern, on his word, budgeted in W9.A's and W9.C's text.**
 
 ## 7. Draft items (for Phase 9's drafting; lifted as ruled)
 
@@ -779,6 +781,7 @@ Added:
   is the default amortised evidence; ENFR is trialled against it and
   takes the survey-scale and likelihood-free cases only if it wins.
   *Recommended: so.*
+  **Ruled 2026-10-22 (Peter): importance sampling first.**
 - **D11 — ground truth.** jaxns or blackjax nested slice sampling pulled
   from Phase 10 into Phase 9 as the jax-backend evidence engine and the
   ladder's rung-1 reference; pocoMC struck. *Recommended: so, the
