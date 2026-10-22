@@ -327,6 +327,7 @@ per-PR budget, measured rows under `heavy` or on the cluster, and
   stage 2) at matched budget (recommended), or a synthetic many-parameter
   problem only. *Recommended: W8.9's population, with the synthetic
   reproduction pinned.*
+  **Ruled 2026-10-22 (Peter): both — the synthetic side pinned per PR (the paper's Gaussian–Gaussian reproduction for the mechanics; a synthetic many-parameter ampere population at about a hundred parameters for the gain, carrying the per-realisation check and the CP4SBI and ensemble comparison rows of §9.6), and W8.9's 133-disc population at matched budget as the measured acceptance, run once on the cluster or overnight and recorded in the item.**
 - **D6 — the Phase 8 hooks.** Amend W8.6's and W8.3's texts now (one
   sentence each); `reduced_chi2` as a Phase 8 filler (S; Sonnet) or
   W9.B's first row. *Recommended: amend both; the filler if a slot
