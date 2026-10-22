@@ -30,14 +30,21 @@ optimisers, the CI-as-gate policy, the GPU rows on the cluster, the
 community-health files, the first reader (`ampere.interferometry`,
 OIFITS) — and **the beta `ampere-astro 1.0.0b1` is released on PyPI**
 (tag `v1.0.0b1`, GitHub release, Zenodo concept DOI
-10.5281/zenodo.23151412). **Phase 7 is ruled and ready to dispatch**
-(drafted 2026-10-05, D1–D11 ruled the same day, the user-journeys fillers
-ruled 2026-10-06; seventeen items W7.0–W7.16 in `WORK_ITEMS.md`): the
-W6.11 memo's `Derived` node and path populations open it, the JWST
-reader, the beta's carried list and the convergence default follow.
-`docs/design/horizon_beyond_phase7.md` and
-`docs/design/user_journeys_memo.md` are the horizon and the users; they
-fold into the plan at Phase 8's drafting.
+10.5281/zenodo.23151412). **Phase 7 (hierarchy, derived parameters, the second reader) is
+complete** (drafted 2026-10-05, closed 2026-10-15 with the release of
+**`ampere-astro 1.0.0b2`** — tag `v1.0.0b2`, Zenodo version DOI
+10.5281/zenodo.23384271; eighteen items W7.0–W7.17: the `Derived` node,
+populations over a dataset's own parameters, the JWST reader and
+`ampere.spectroscopy`, line fluxes, the jax quasiseparable scan provider
+on an accelerator, the optimiser's mode as the ensembles' default start,
+the user-journeys fillers). **Phase 8 (any model, any data) is ruled**
+(drafted and ruled 2026-10-15, D1–D12; seventeen items W8.0–W8.16 in
+`WORK_ITEMS.md`): the foreign function and the emulator, radial profiles
+(`docs/design/modalities/radial_profiles.md` is the design), the readers
+and the filter library, `FixedCovarianceNoise`, model comparison, EFGP on
+torch and jax, the model zoo, the debris-disc flagship, `1.0.0b3`. The
+horizon beyond it is `docs/design/horizon_beyond_phase7.md` §9 (Phases
+9–10) re-ranked by `docs/design/user_journeys_memo.md` §6.
 Development happens on `master` locally and `origin/master` carries the
 v2 line (since D15, 2026-10-05; the `v2` mirror is retired); the
 orchestrator pushes at every state change and CI on the push is the gate
