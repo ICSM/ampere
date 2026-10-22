@@ -332,8 +332,10 @@ per-PR budget, measured rows under `heavy` or on the cluster, and
   sentence each); `reduced_chi2` as a Phase 8 filler (S; Sonnet) or
   W9.B's first row. *Recommended: amend both; the filler if a slot
   opens, else W9.B.*
+  **Ruled 2026-10-22 (Peter): amend all three — W8.6, W8.3 and W8.16 (§9.5's hooks; the W8.5 hook superseded by that item's 2026-10-22 amendments); `reduced_chi2` the Phase 8 filler when a slot opens, else W9.B's first row. Applied to `WORK_ITEMS.md` the same day.**
 - **D7 — cross-fitted ENFR's default.** Decided by W9.A's ablation, not
   adopted from the note. *Recommended: so.*
+  **Ruled 2026-10-22 (Peter): the switch; its default from W9.A's ablation.**
 - **D8 — the goodness-of-fit screen's home.** The deferred
   `ampere.diagnostics` (family A) with ENFR's p-value as its first
   content, re-opening the RHMF question with a better-founded candidate;

@@ -4450,7 +4450,16 @@ emulation error as it absorbs physics error and the M2 methodology
 measures whether it did; Bayesian optimisation as acquisition for the
 training set (the inference memo's §10 ruling); what provenance carries
 (the training set's spec hash, the architecture, the error model); the
-questions for Peter and the drafted W8.4 text. Opus-reviewed read-only
+questions for Peter and the drafted W8.4 text; **hook (amortised-evidence
+memo D6, ruled 2026-10-22):** the training-set-to-model contract names
+the simulation bank as a shareable artefact with three customers — the
+emulator, `SBIEngine` (the `--training-set` idiom) and Phase 9's evidence
+engine — so the simulation budget is paid once, with a fidelity column
+for multi-fidelity training (horizon (a)'s consumer), and the error model
+takes W8.16's Student-t route for an *estimated* residual covariance as
+its concrete recipe; Różański and Ting's scaling law (10× compute for
+~7× lower MSE) and the rule "residuals below the survey's uncertainty or
+model them" are the budgeting rules the memo states. Opus-reviewed read-only
 as W6.11 was. **Depends:** nothing. **Accept:** the memo with its
 decision list; two probes against the PHOENIX prototype (`examples/phoenix_star`)
 showing the contract fits it; no code.
@@ -4557,7 +4566,18 @@ problems' `log_prob`; Savage–Dickey for nested models (a parameter fixed
 at a value the wider model's prior covers); Bayesian model averaging of
 posterior predictives weighted by the table; the learnt harmonic-mean
 estimator (`harmonic`) behind an extra as the route for runs with no
-evidence (D8). Each returns a typed result the docs render as a table;
+evidence (D8). **Hook (amortised-evidence memo D6, ruled 2026-10-22):**
+the table takes *any* archived run carrying the evidence triple and
+renders `ampere_evidence_method` beside the value, and the item settles
+that attribute's vocabulary now — `"nested_sampling"`, `"bridge"`,
+`"savage_dickey"`, `"harmonic"`, with the slots `"importance_sampling"`
+(Phase 9's W9.0, the amortised posterior as proposal against the GP
+marginal) and `"enfr"` (a learned estimator, with its validation rung
+recorded) named in the page's "when each estimator is trustworthy"
+section as rows to come; `harmonic 1.3.1` carries flow-based
+Savage–Dickey beside the learnt harmonic mean, so one dependency may
+cover two estimators, subject to its second licence file
+(`LICENSE_EXT.txt`) being read. Each returns a typed result the docs render as a table;
 a `compare.rst` page that replaces "roll your own" and says when each
 estimator is trustworthy (the SBC-style check on the M2 scenarios: the
 true generating model preferred at the strengths where it should be,
@@ -4743,18 +4763,29 @@ at `exact`; the sum with a GP component against a dense construction; the
 diagonal is not (the memo's §4 probe as the fixture). The customers named
 in the docs: an azimuthally averaged profile (W8.2), a photometric table
 with a published covariance (a Gaia or catalogue solution), a binned
-spectrum with a resampling covariance. **Depends:** nothing. **Accept:**
-the rows; `likelihoods.md` amended; the SED page's one paragraph; gates
+spectrum with a resampling covariance. **Hook (amortised-evidence memo
+D6, ruled 2026-10-22):** when the matrix is *estimated* from a finite
+sample (an azimuthal average's bins, an emulator's residual covariance),
+the Gaussian is over-confident — the Sellentin–Heavens correction and
+Heavens, Whiteway and Sellentin's (2026) Student-t with extra Gaussian
+error sources are the right family — so the component takes
+`family="student_t"` with the number of realisations the estimate came
+from, on the same matrix, with its own conformance row against a dense
+reference; the Gaussian stays the default for a known covariance. **Depends:** nothing. **Accept:**
+the rows (the Student-t row among them); `likelihoods.md` amended; the SED page's one paragraph; gates
 all three.
 
 **Ordering and waves** (two agents at a time; Fable's memo between
-waves). Wave 1: **W8.0** (ForeignModel) ∥ **W8.16** (the covariance component,
-S) then **W8.2** (radial profiles) in that slot — disjoint files (a model
-class and its flag; a noise component; a kind and steps), all on the three
-backends, so their jax and torch legs run one at a time; Fable writes
-**W8.3** beside them. Wave 2: **W8.5** (photometry and the filter
-library) ∥ **W8.6** (compare); the fillers **W8.10**, **W8.12** in the
-free slots (W8.12 before W8.2's example is written if the timing allows,
+waves). Wave 1 (**D4 amended 2026-10-22**): **W8.0** (ForeignModel) ∥ **W8.5**
+(photometry and the filter library, M — as early as possible for the
+paper), then **W8.16** (the covariance component, S) and **W8.2** (radial
+profiles) in the slot W8.0 frees — disjoint files (a model class and its
+flag; a library, a reader and a front door; a noise component; a kind and
+steps), all on the three backends, so their jax and torch legs run one at
+a time; Fable writes **W8.3** beside them. Wave 2: **W8.6** (compare) ∥
+**W8.10** (after W8.5); the fillers **W8.12** and **`reduced_chi2`** in
+the calibration group (S; Sonnet; the amortised-evidence memo's §3.4,
+D6) in the free slots (W8.12 before W8.2's example is written if the timing allows,
 else W8.2 takes the VLTI route and W8.12's example row joins later).
 Wave 3: **W8.4** (EmulatedModel, after W8.3's ruling) ∥ **W8.7** (EFGP;
 its cluster run on Peter's word). Wave 4: **W8.8** (the zoo, after W8.4)
